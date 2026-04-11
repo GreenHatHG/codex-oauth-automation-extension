@@ -58,7 +58,7 @@
       <div class="data-row">
         <span class="data-label">邮箱服务</span>
         <select id="select-mail-provider" class="data-select">
-          <option value="hotmail-api">Hotmail Graph（refresh_token）</option>
+          <option value="hotmail-api">Hotmail（微软 Graph）</option>
           <option value="163">163 邮箱 (mail.163.com)</option>
           <option value="163-vip">163 VIP 邮箱 (webmail.vip.163.com)</option>
           <option value="qq">QQ 邮箱 (wx.mail.qq.com)</option>
@@ -123,16 +123,16 @@
         <input type="text" id="input-hotmail-email" class="data-input" placeholder="name@hotmail.com" />
       </div>
       <div class="data-row">
-        <span class="data-label">Client ID</span>
-        <input type="text" id="input-hotmail-client-id" class="data-input mono" placeholder="Microsoft app client id" />
+        <span class="data-label">客户端 ID</span>
+        <input type="text" id="input-hotmail-client-id" class="data-input mono" placeholder="微软应用客户端 ID" />
       </div>
       <div class="data-row">
         <span class="data-label">邮箱密码</span>
         <input type="password" id="input-hotmail-password" class="data-input" placeholder="可选，仅用于记录" />
       </div>
       <div class="data-row">
-        <span class="data-label">Refresh</span>
-        <input type="password" id="input-hotmail-refresh-token" class="data-input mono" placeholder="必填，粘贴 refresh_token" />
+        <span class="data-label">刷新令牌</span>
+        <input type="password" id="input-hotmail-refresh-token" class="data-input mono" placeholder="必填，粘贴刷新令牌（refresh token）" />
       </div>
       <div class="data-row hotmail-actions-row">
         <span class="data-label"></span>
@@ -141,7 +141,7 @@
       <div class="data-row hotmail-import-row">
         <span class="data-label">批量导入</span>
         <div class="hotmail-import-box">
-          <textarea id="input-hotmail-import" class="data-textarea mono" placeholder="账号----密码----ID----Token&#10;name@hotmail.com----password----client-id----refresh-token"></textarea>
+          <textarea id="input-hotmail-import" class="data-textarea mono" placeholder="账号----密码----客户端ID----刷新令牌&#10;name@hotmail.com----password----client-id----refresh-token"></textarea>
           <button id="btn-import-hotmail-accounts" class="btn btn-outline btn-sm" type="button">导入</button>
         </div>
       </div>

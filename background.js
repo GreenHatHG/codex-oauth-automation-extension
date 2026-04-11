@@ -402,7 +402,7 @@ async function ensureHotmailAccountForFlow(options = {}) {
   }
 
   if (!account) {
-    throw new Error('没有可用的 Hotmail 账号。请先在侧边栏添加至少一个带 refresh token 的账号。');
+    throw new Error('没有可用的 Hotmail 账号。请先在侧边栏添加至少一个带刷新令牌（refresh token）的账号。');
   }
   if (!isAccountAllocatable(account)) {
     throw new Error(`Hotmail 账号 ${account.email || account.id} 尚未就绪，无法读取邮件。`);
@@ -416,10 +416,10 @@ async function requestHotmailMailApiLegacy(account, mailbox = 'INBOX') {
     throw new Error('Hotmail 账号缺少邮箱地址。');
   }
   if (!account?.clientId) {
-    throw new Error(`Hotmail 账号 ${account.email || account.id} 缺少 client ID。`);
+    throw new Error(`Hotmail 账号 ${account.email || account.id} 缺少客户端 ID。`);
   }
   if (!account?.refreshToken) {
-    throw new Error(`Hotmail 账号 ${account.email || account.id} 缺少 refresh token。`);
+    throw new Error(`Hotmail 账号 ${account.email || account.id} 缺少刷新令牌（refresh token）。`);
   }
 
   const url = buildHotmailMailApiLatestUrl({
@@ -513,13 +513,13 @@ function isHotmailAccessTokenUsable(account, now = Date.now()) {
 
 async function refreshHotmailAccessToken(account) {
   if (!account?.email) {
-    throw new Error('Hotmail account email is missing.');
+    throw new Error('Hotmail 账号缺少邮箱地址。');
   }
   if (!account?.clientId) {
-    throw new Error(`Hotmail account ${account.email || account.id} is missing a client ID.`);
+    throw new Error(`Hotmail 账号 ${account.email || account.id} 缺少客户端 ID。`);
   }
   if (!account?.refreshToken) {
-    throw new Error(`Hotmail account ${account.email || account.id} is missing a refresh token.`);
+    throw new Error(`Hotmail 账号 ${account.email || account.id} 缺少刷新令牌（refresh token）。`);
   }
 
   const { timeoutMs, scopes, tokenUrl } = getHotmailGraphRequestConfig();
@@ -544,8 +544,8 @@ async function refreshHotmailAccessToken(account) {
   } catch (err) {
     const error = new Error(
       err?.name === 'AbortError'
-        ? `Hotmail token refresh timed out after ${Math.round(timeoutMs / 1000)}s`
-        : `Hotmail token refresh failed: ${err.message}`
+        ? `Hotmail 令牌刷新超时（>${Math.round(timeoutMs / 1000)} 秒）`
+        : `Hotmail 令牌刷新失败：${err.message}`
     );
     error.code = 'HOTMAIL_TOKEN_REFRESH_FAILED';
     throw error;
@@ -563,7 +563,7 @@ async function refreshHotmailAccessToken(account) {
 
   if (!response.ok || !payload?.access_token) {
     const errorText = payload?.error_description || payload?.error?.message || payload?.error || payload?.message || text || `HTTP ${response.status}`;
-    const error = new Error(`Hotmail token refresh failed: ${errorText}`);
+    const error = new Error(`Hotmail 令牌刷新失败：${errorText}`);
     error.code = 'HOTMAIL_TOKEN_REFRESH_FAILED';
     throw error;
   }
@@ -603,8 +603,8 @@ async function requestHotmailGraphMessages(account, mailbox = 'INBOX') {
   } catch (err) {
     const error = new Error(
       err?.name === 'AbortError'
-        ? `Hotmail Graph request timed out after ${Math.round(timeoutMs / 1000)}s: ${mailbox}`
-        : `Hotmail Graph request failed: ${err.message}`
+        ? `Hotmail 邮件请求超时（>${Math.round(timeoutMs / 1000)} 秒）：${mailbox}`
+        : `Hotmail 邮件请求失败：${err.message}`
     );
     error.code = 'HOTMAIL_GRAPH_REQUEST_FAILED';
     throw error;
@@ -622,7 +622,7 @@ async function requestHotmailGraphMessages(account, mailbox = 'INBOX') {
 
   if (!response.ok) {
     const errorText = payload?.error?.message || payload?.error_description || payload?.message || text || `HTTP ${response.status}`;
-    const error = new Error(`Hotmail Graph request failed: ${errorText}`);
+    const error = new Error(`Hotmail 邮件请求失败：${errorText}`);
     error.code = response.status === 401 || response.status === 403
       ? 'HOTMAIL_GRAPH_AUTH_FAILED'
       : 'HOTMAIL_GRAPH_REQUEST_FAILED';
@@ -755,9 +755,9 @@ async function pollHotmailVerificationCode(step, state, pollPayload = {}) {
       })
       .slice(0, 3)
       .map((message) => {
-        const receivedAt = message?.receivedDateTime || 'unknown-time';
-        const sender = message?.from?.emailAddress?.address || 'unknown';
-        const subject = message?.subject || '(no subject)';
+        const receivedAt = message?.receivedDateTime || '未知时间';
+        const sender = message?.from?.emailAddress?.address || '未知发件人';
+        const subject = message?.subject || '（无主题）';
         const preview = String(message?.bodyPreview || '').replace(/\s+/g, ' ').trim().slice(0, 80);
         return `[${message.mailbox || 'INBOX'}] ${receivedAt} | ${sender} | ${subject} | ${preview}`;
       })
@@ -1367,7 +1367,7 @@ function getSourceLabel(source) {
     'mail-163': '163 邮箱',
     'inbucket-mail': 'Inbucket 邮箱',
     'duck-mail': 'Duck 邮箱',
-    'hotmail-api': 'Hotmail API',
+    'hotmail-api': 'Hotmail（微软 Graph）',
   };
   return labels[source] || source || '未知来源';
 }
@@ -2004,7 +2004,7 @@ function waitForStepComplete(step, timeoutMs = 120000) {
     throwIfStopped();
     const timer = setTimeout(() => {
       stepWaiters.delete(step);
-      reject(new Error(`Step ${step} timed out after ${timeoutMs / 1000}s`));
+      reject(new Error(`步骤 ${step} 等待超时（>${timeoutMs / 1000} 秒）`));
     }, timeoutMs);
 
     stepWaiters.set(step, {
@@ -2705,7 +2705,7 @@ async function executeStep3(state) {
 function getMailConfig(state) {
   const provider = state.mailProvider || 'qq';
   if (provider === HOTMAIL_PROVIDER) {
-    return { provider: HOTMAIL_PROVIDER, label: 'Hotmail API' };
+    return { provider: HOTMAIL_PROVIDER, label: 'Hotmail（微软 Graph）' };
   }
   if (provider === '163') {
     return { source: 'mail-163', url: 'https://mail.163.com/js6/main.jsp?df=mail163_letter#module=mbox.ListModule%7C%7B%22fid%22%3A1%2C%22order%22%3A%22date%22%2C%22desc%22%3Atrue%7D', label: '163 邮箱' };

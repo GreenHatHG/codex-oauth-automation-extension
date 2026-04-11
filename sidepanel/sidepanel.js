@@ -698,8 +698,8 @@ function renderHotmailAccounts() {
         <span class="hotmail-status-chip ${escapeHtml(getHotmailStatusClass(account))}">${escapeHtml(getHotmailStatusLabel(account))}</span>
       </div>
       <div class="hotmail-account-meta">
-        <span>Client ID: ${escapeHtml(account.clientId ? `${account.clientId.slice(0, 10)}...` : '未填写')}</span>
-        <span>Refresh: ${account.refreshToken ? '已保存' : '未保存'}</span>
+        <span>客户端 ID：${escapeHtml(account.clientId ? `${account.clientId.slice(0, 10)}...` : '未填写')}</span>
+        <span>刷新令牌：${account.refreshToken ? '已保存' : '未保存'}</span>
         <span>分配状态: ${escapeHtml(getHotmailAvailabilityLabel(account))}</span>
         <span>上次校验: ${escapeHtml(formatDateTime(account.lastAuthAt))}</span>
         <span>上次使用: ${escapeHtml(formatDateTime(account.lastUsedAt))}</span>
@@ -1172,11 +1172,11 @@ btnAddHotmailAccount?.addEventListener('click', async () => {
     return;
   }
   if (!clientId) {
-    showToast('请先填写 Microsoft client ID。', 'warn');
+    showToast('请先填写微软应用客户端 ID。', 'warn');
     return;
   }
   if (!refreshToken) {
-    showToast('请先填写 refresh token。', 'warn');
+    showToast('请先填写刷新令牌（refresh token）。', 'warn');
     return;
   }
 
