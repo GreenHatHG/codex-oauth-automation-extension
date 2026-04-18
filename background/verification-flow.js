@@ -185,6 +185,32 @@
       };
     }
 
+    function getRemainingBeforeResendMs(resendIntervalMs, resendWindowStartedAt) {
+      if (resendIntervalMs <= 0 || resendWindowStartedAt <= 0) {
+        return 0;
+      }
+
+      return Math.max(0, resendIntervalMs - (Date.now() - resendWindowStartedAt));
+    }
+
+    function limitPollAttemptsToResendWindow(payload, resendIntervalMs, resendWindowStartedAt) {
+      if (resendIntervalMs <= 0 || resendWindowStartedAt <= 0) {
+        return payload;
+      }
+
+      const remainingBeforeResendMs = getRemainingBeforeResendMs(
+        resendIntervalMs,
+        resendWindowStartedAt
+      );
+      const baseMaxAttempts = Math.max(1, Number(payload.maxAttempts) || 5);
+      const intervalMs = Math.max(1, Number(payload.intervalMs) || 3000);
+      payload.maxAttempts = Math.max(
+        1,
+        Math.min(baseMaxAttempts, Math.floor(remainingBeforeResendMs / intervalMs) + 1)
+      );
+      return payload;
+    }
+
     async function requestVerificationCodeResend(step, options = {}) {
       throwIfStopped();
       const signupTabId = await getTabId('signup-page');
@@ -290,6 +316,10 @@
       const totalRounds = maxResendRequests + 1;
       const maxRounds = totalRounds;
       const resendIntervalMs = Math.max(0, Number(pollOverrides.resendIntervalMs) || 0);
+      const initialResendWindowStartedAt = Math.max(
+        0,
+        Number(payloadOverrides.filterAfterTimestamp) || Date.now()
+      );
       let lastResendAt = Number(pollOverrides.lastResendAt) || 0;
       let usedResendRequests = 0;
 
@@ -308,18 +338,15 @@
 
         while (true) {
           throwIfStopped();
+          const resendWindowStartedAt = lastResendAt > 0
+            ? lastResendAt
+            : initialResendWindowStartedAt;
           const payload = getVerificationPollPayload(step, state, {
             ...payloadOverrides,
             filterAfterTimestamp,
             excludeCodes: [...rejectedCodes],
           });
-
-          if (lastResendAt > 0) {
-            const remainingBeforeResendMs = Math.max(0, resendIntervalMs - (Date.now() - lastResendAt));
-            const baseMaxAttempts = Math.max(1, Number(payload.maxAttempts) || 5);
-            const intervalMs = Math.max(1, Number(payload.intervalMs) || 3000);
-            payload.maxAttempts = Math.max(1, Math.min(baseMaxAttempts, Math.floor(remainingBeforeResendMs / intervalMs) + 1));
-          }
+          limitPollAttemptsToResendWindow(payload, resendIntervalMs, resendWindowStartedAt);
 
           try {
             const timedPoll = await applyMailPollingTimeBudget(
@@ -368,9 +395,10 @@
             await addLog(`步骤 ${step}：${err.message}`, 'warn');
           }
 
-          const remainingBeforeResendMs = lastResendAt > 0
-            ? Math.max(0, resendIntervalMs - (Date.now() - lastResendAt))
-            : 0;
+          const remainingBeforeResendMs = getRemainingBeforeResendMs(
+            resendIntervalMs,
+            resendWindowStartedAt
+          );
           if (remainingBeforeResendMs > 0) {
             await addLog(
               `步骤 ${step}：距离下次重新发送验证码还差 ${Math.ceil(remainingBeforeResendMs / 1000)} 秒，继续刷新邮箱（第 ${round}/${maxRounds} 轮）...`,
@@ -567,8 +595,12 @@
       const maxSubmitAttempts = 7;
       const resendIntervalMs = Math.max(0, Number(options.resendIntervalMs) || 0);
       let lastResendAt = Number(options.lastResendAt) || 0;
+      const useRollingFilterAfterTimestamp = mail.provider === '2925' && resendIntervalMs > 0;
 
-      const updateFilterAfterTimestampForVerificationStep = async (_requestedAt) => {
+      const updateFilterAfterTimestampForVerificationStep = async (requestedAt) => {
+        if (useRollingFilterAfterTimestamp && Number(requestedAt) > 0) {
+          nextFilterAfterTimestamp = Number(requestedAt);
+        }
         return nextFilterAfterTimestamp;
       };
 

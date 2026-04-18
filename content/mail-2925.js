@@ -10,30 +10,6 @@ if (!isTopFrame) {
   console.log(MAIL2925_PREFIX, 'Skipping child frame');
 } else {
 
-let seenCodes = new Set();
-
-async function loadSeenCodes() {
-  try {
-    const data = await chrome.storage.session.get('seen2925Codes');
-    if (data.seen2925Codes && Array.isArray(data.seen2925Codes)) {
-      seenCodes = new Set(data.seen2925Codes);
-      console.log(MAIL2925_PREFIX, `Loaded ${seenCodes.size} previously seen codes`);
-    }
-  } catch (err) {
-    console.warn(MAIL2925_PREFIX, 'Session storage unavailable, using in-memory seen codes:', err?.message || err);
-  }
-}
-
-loadSeenCodes();
-
-async function persistSeenCodes() {
-  try {
-    await chrome.storage.session.set({ seen2925Codes: [...seenCodes] });
-  } catch (err) {
-    console.warn(MAIL2925_PREFIX, 'Could not persist seen codes, continuing in-memory only:', err?.message || err);
-  }
-}
-
 chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
   if (message.type === 'POLL_EMAIL') {
     resetStopState();
@@ -243,7 +219,7 @@ function normalizeMailIdentityPart(value) {
   return normalizeNodeText(value).toLowerCase();
 }
 
-function getMailItemId(item, index = 0) {
+function getMailItemId(item) {
   const candidates = [
     item?.getAttribute?.('data-id'),
     item?.dataset?.id,
@@ -258,7 +234,6 @@ function getMailItemId(item, index = 0) {
   }
 
   return [
-    index,
     normalizeMailIdentityPart(getMailItemTimeText(item)),
     normalizeMailIdentityPart(getMailItemText(item)).slice(0, 240),
   ].join('|');
@@ -266,8 +241,8 @@ function getMailItemId(item, index = 0) {
 
 function getCurrentMailIds(items = []) {
   const ids = new Set();
-  items.forEach((item, index) => {
-    ids.add(getMailItemId(item, index));
+  items.forEach((item) => {
+    ids.add(getMailItemId(item));
   });
   return ids;
 }
@@ -364,6 +339,18 @@ function parseMailItemTimestamp(item) {
   }
 
   return null;
+}
+
+function isMailItemInCurrentWindow(itemId, knownMailIds, itemTimestamp, filterAfterTimestamp) {
+  if (!(filterAfterTimestamp > 0)) {
+    return !knownMailIds.has(itemId);
+  }
+
+  if (Number.isFinite(itemTimestamp) && itemTimestamp > 0) {
+    return itemTimestamp >= filterAfterTimestamp;
+  }
+
+  return !knownMailIds.has(itemId);
 }
 
 async function sleepRandom(minMs, maxMs = minMs) {
@@ -478,10 +465,12 @@ async function handlePollEmail(step, payload) {
     subjectFilters,
     maxAttempts,
     intervalMs,
+    filterAfterTimestamp = 0,
     excludeCodes = [],
     strictChatGPTCodeOnly = false,
   } = payload || {};
   const excludedCodeSet = new Set(excludeCodes.filter(Boolean));
+  const normalizedFilterAfterTimestamp = Math.max(0, Number(filterAfterTimestamp) || 0);
 
   log(`步骤 ${step}：开始轮询 2925 邮箱（最多 ${maxAttempts} 次）`);
 
@@ -512,8 +501,6 @@ async function handlePollEmail(step, payload) {
   log(`步骤 ${step}：邮件列表已加载，共 ${initialItems.length} 封邮件`);
   log(`步骤 ${step}：已记录当前 ${knownMailIds.size} 封旧邮件快照`);
 
-  const FALLBACK_AFTER = 3;
-
   for (let attempt = 1; attempt <= maxAttempts; attempt += 1) {
     log(`步骤 ${step}：正在轮询 2925 邮箱，第 ${attempt}/${maxAttempts} 次`);
 
@@ -525,23 +512,17 @@ async function handlePollEmail(step, payload) {
 
     const items = findMailItems();
     if (items.length > 0) {
-      const useFallback = attempt > FALLBACK_AFTER;
-      const newMailIds = new Set();
-
-      items.forEach((item, index) => {
-        const itemId = getMailItemId(item, index);
-        if (!knownMailIds.has(itemId)) {
-          newMailIds.add(itemId);
-        }
-      });
-
       for (let index = 0; index < items.length; index += 1) {
         const item = items[index];
-        const itemId = getMailItemId(item, index);
-        const isNewMail = newMailIds.has(itemId);
+        const itemId = getMailItemId(item);
         const itemTimestamp = parseMailItemTimestamp(item);
 
-        if (!useFallback && !isNewMail) {
+        if (!isMailItemInCurrentWindow(
+          itemId,
+          knownMailIds,
+          itemTimestamp,
+          normalizedFilterAfterTimestamp
+        )) {
           continue;
         }
 
@@ -563,28 +544,15 @@ async function handlePollEmail(step, payload) {
           log(`步骤 ${step}：跳过排除的验证码：${candidateCode}`, 'info');
           continue;
         }
-        if (seenCodes.has(candidateCode)) {
-          log(`步骤 ${step}：跳过已处理过的验证码：${candidateCode}`, 'info');
-          continue;
-        }
-
-        seenCodes.add(candidateCode);
-        persistSeenCodes();
-        const source = useFallback && !isNewMail
-          ? (bodyCode ? '回退匹配邮件正文' : '回退匹配邮件')
-          : (bodyCode ? '新邮件正文' : '新邮件');
+        const source = bodyCode ? '新邮件正文' : '新邮件';
         const timeLabel = itemTimestamp ? `，时间：${new Date(itemTimestamp).toLocaleString('zh-CN', { hour12: false })}` : '';
         log(`步骤 ${step}：已找到验证码：${candidateCode}（来源：${source}${timeLabel}）`, 'ok');
         return { ok: true, code: candidateCode, emailTimestamp: Date.now() };
       }
 
-      items.forEach((item, index) => {
-        knownMailIds.add(getMailItemId(item, index));
+      items.forEach((item) => {
+        knownMailIds.add(getMailItemId(item));
       });
-    }
-
-    if (attempt === FALLBACK_AFTER + 1) {
-      log(`步骤 ${step}：连续 ${FALLBACK_AFTER} 次未发现新邮件，开始回退到首封匹配邮件`, 'warn');
     }
 
     if (attempt < maxAttempts) {

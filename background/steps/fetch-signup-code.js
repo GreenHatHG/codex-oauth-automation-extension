@@ -90,12 +90,15 @@
         }
       }
 
+      const requestFreshCodeFirst = mail.provider !== HOTMAIL_PROVIDER && mail.provider !== '2925';
+      const resendIntervalMs = mail.provider === HOTMAIL_PROVIDER
+        ? 0
+        : STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS;
+
       await resolveVerificationStep(4, state, mail, {
         filterAfterTimestamp: stepStartedAt,
-        requestFreshCodeFirst: mail.provider === HOTMAIL_PROVIDER ? false : true,
-        resendIntervalMs: (mail.provider === HOTMAIL_PROVIDER || mail.provider === '2925')
-          ? 0
-          : STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS,
+        requestFreshCodeFirst,
+        resendIntervalMs,
       });
     }
 

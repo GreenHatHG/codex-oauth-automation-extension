@@ -126,6 +126,10 @@
         }
       }
 
+      const resendIntervalMs = mail.provider === HOTMAIL_PROVIDER
+        ? 0
+        : STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS;
+
       await resolveVerificationStep(8, {
         ...state,
         step8VerificationTargetEmail: displayedVerificationEmail || '',
@@ -134,9 +138,7 @@
         getRemainingTimeMs: getStep8RemainingTimeResolver(),
         requestFreshCodeFirst: false,
         targetEmail: fixedTargetEmail,
-        resendIntervalMs: (mail.provider === HOTMAIL_PROVIDER || mail.provider === '2925')
-          ? 0
-          : STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS,
+        resendIntervalMs,
       });
     }
 
