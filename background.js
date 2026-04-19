@@ -132,6 +132,9 @@ const HOTMAIL_PROVIDER = 'hotmail-api';
 const LUCKMAIL_PROVIDER = 'luckmail-api';
 const CLOUDFLARE_TEMP_EMAIL_PROVIDER = 'cloudflare-temp-email';
 const CLOUDFLARE_TEMP_EMAIL_GENERATOR = 'cloudflare-temp-email';
+const QQ_ALIAS_EMAIL_GENERATOR = 'qq-alias';
+const QQ_ALIAS_ACCOUNT_URL = 'https://wx.mail.qq.com/account/index#/';
+const QQ_ALIAS_ACCOUNT_URL_WITH_SID_PREFIX = 'https://wx.mail.qq.com/account/index?sid=';
 const HOTMAIL_MAILBOXES = ['INBOX', 'Junk'];
 const STOP_ERROR_MESSAGE = '流程已被用户停止。';
 const CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX = 'CF_SECURITY_BLOCKED::';
@@ -313,6 +316,9 @@ const DEFAULT_STATE = {
   flowStartTime: null, // 当前流程开始时间。
   tabRegistry: {}, // 程序维护的标签页注册表。
   sourceLastUrls: {}, // 各来源页面最近一次打开的地址记录。
+  qqAliasPendingAction: null, // QQ 别名流程当前等待的人工确认信息。
+  qqAliasContinueStage: '', // QQ 别名流程下一次点击“继续”后应执行的后台阶段。
+  qqAliasLastGeneratedEmail: '', // 最近一次由 QQ 别名流程自动生成并写入的邮箱。
   logs: [], // 侧边栏展示的运行日志。
   ...PERSISTED_SETTING_DEFAULTS, // 合并 chrome.storage.local 中持久化保存的用户配置。
   luckmailApiKey: '',
@@ -639,6 +645,9 @@ function normalizeEmailGenerator(value = '') {
   const normalized = String(value || '').trim().toLowerCase();
   if (normalized === 'custom' || normalized === 'manual') {
     return 'custom';
+  }
+  if (normalized === QQ_ALIAS_EMAIL_GENERATOR) {
+    return QQ_ALIAS_EMAIL_GENERATOR;
   }
   if (normalized === 'icloud') {
     return 'icloud';
@@ -1152,6 +1161,54 @@ async function setEmailState(email) {
 async function setPasswordState(password) {
   await setState({ password });
   broadcastDataUpdate({ password });
+}
+
+function normalizeQqAliasPendingAction(action = null) {
+  if (!action || typeof action !== 'object' || Array.isArray(action)) {
+    return null;
+  }
+
+  const id = Number(action.id);
+  const title = String(action.title || '').trim();
+  const message = String(action.message || '').trim();
+  const continueLabel = String(action.continueLabel || '').trim() || '继续';
+  if (!Number.isFinite(id) || !title || !message) {
+    return null;
+  }
+
+  return {
+    id,
+    title,
+    message,
+    continueLabel,
+  };
+}
+
+async function setQqAliasPendingAction(action, continueStage = '') {
+  const normalizedAction = normalizeQqAliasPendingAction(action);
+  if (!normalizedAction) {
+    throw new Error('QQ 别名等待确认信息无效。');
+  }
+
+  const updates = {
+    qqAliasPendingAction: normalizedAction,
+    qqAliasContinueStage: String(continueStage || '').trim(),
+  };
+  await setState(updates);
+  broadcastDataUpdate(updates);
+  return normalizedAction;
+}
+
+async function clearQqAliasFlowState(options = {}) {
+  const updates = {
+    qqAliasPendingAction: null,
+    qqAliasContinueStage: '',
+  };
+  if (options.lastGeneratedEmail !== undefined) {
+    updates.qqAliasLastGeneratedEmail = String(options.lastGeneratedEmail || '').trim();
+  }
+  await setState(updates);
+  broadcastDataUpdate(updates);
 }
 
 function getLuckmailUsedPurchases(state = {}) {
@@ -3497,6 +3554,72 @@ async function getTabId(source) {
   return tabRuntime.getTabId(source);
 }
 
+function buildQqAliasAccountUrl(sid = '') {
+  const normalizedSid = String(sid || '').trim();
+  if (!normalizedSid) {
+    return QQ_ALIAS_ACCOUNT_URL;
+  }
+  return `${QQ_ALIAS_ACCOUNT_URL_WITH_SID_PREFIX}${encodeURIComponent(normalizedSid)}#/`;
+}
+
+async function getQqMailSessionSidFromTabUrl() {
+  const qqMailTabId = await getTabId('qq-mail');
+  if (!Number.isInteger(qqMailTabId)) {
+    return '';
+  }
+
+  const qqMailTab = await chrome.tabs.get(qqMailTabId).catch(() => null);
+  const parsed = parseUrlSafely(qqMailTab?.url);
+  return String(parsed?.searchParams.get('sid') || '').trim();
+}
+
+async function getQqMailSessionSidFromCookies() {
+  if (!chrome.cookies?.get && !chrome.cookies?.getAll) {
+    return '';
+  }
+
+  const directLookups = [
+    { url: 'https://wx.mail.qq.com/', name: 'xm_sid' },
+    { url: 'https://mail.qq.com/', name: 'xm_sid' },
+  ];
+
+  if (chrome.cookies?.get) {
+    for (const lookup of directLookups) {
+      const cookie = await chrome.cookies.get(lookup).catch(() => null);
+      const value = String(cookie?.value || '').trim();
+      if (value) {
+        return value;
+      }
+    }
+  }
+
+  if (!chrome.cookies?.getAll) {
+    return '';
+  }
+
+  const cookies = await chrome.cookies.getAll({ name: 'xm_sid' }).catch(() => []);
+  for (const cookie of cookies || []) {
+    const domain = normalizeCookieDomainForMatch(cookie?.domain);
+    const value = String(cookie?.value || '').trim();
+    if (!value) continue;
+    if (domain === 'mail.qq.com' || domain.endsWith('.mail.qq.com')) {
+      return value;
+    }
+  }
+
+  return '';
+}
+
+async function getQqAliasAccountUrl() {
+  const sidFromCookies = await getQqMailSessionSidFromCookies();
+  if (sidFromCookies) {
+    return buildQqAliasAccountUrl(sidFromCookies);
+  }
+
+  const sidFromTabUrl = await getQqMailSessionSidFromTabUrl();
+  return buildQqAliasAccountUrl(sidFromTabUrl);
+}
+
 function parseUrlSafely(rawUrl) {
   if (typeof navigationUtils !== 'undefined' && navigationUtils?.parseUrlSafely) {
     return navigationUtils.parseUrlSafely(rawUrl);
@@ -4991,6 +5114,8 @@ async function requestStop(options = {}) {
   const state = await getState();
   const timerPlan = getPendingAutoRunTimerPlan(state);
 
+  await clearQqAliasFlowState();
+
   if (timerPlan?.kind === AUTO_RUN_TIMER_KIND_SCHEDULED_START && !autoRunActive) {
     await cancelScheduledAutoRun({
       logMessage: options.logMessage === false
@@ -5169,6 +5294,9 @@ function getEmailGeneratorLabel(generator) {
   if (generator === 'custom') {
     return '自定义邮箱';
   }
+  if (generator === QQ_ALIAS_EMAIL_GENERATOR) {
+    return 'QQ 别名';
+  }
   if (generator === 'icloud') {
     return 'iCloud 隐私邮箱';
   }
@@ -5184,6 +5312,7 @@ const generatedEmailHelpers = self.MultiPageGeneratedEmailHelpers?.createGenerat
   DUCK_AUTOFILL_URL,
   fetch,
   fetchIcloudHideMyEmail,
+  clearQqAliasFlowState,
   getCloudflareTempEmailAddressFromResponse,
   getCloudflareTempEmailConfig,
   getState,
@@ -5192,7 +5321,12 @@ const generatedEmailHelpers = self.MultiPageGeneratedEmailHelpers?.createGenerat
   normalizeCloudflareTempEmailAddress,
   normalizeEmailGenerator,
   isGeneratedAliasProvider,
+  getQqAliasAccountUrl,
+  QQ_ALIAS_ACCOUNT_URL,
+  QQ_ALIAS_EMAIL_GENERATOR,
   reuseOrCreateTab,
+  sendToContentScriptResilient,
+  setQqAliasPendingAction,
   sendToContentScript,
   setEmailState,
   throwIfStopped,
@@ -5224,6 +5358,10 @@ async function fetchDuckEmail(options = {}) {
 
 async function fetchGeneratedEmail(state, options = {}) {
   return generatedEmailHelpers.fetchGeneratedEmail(state, options);
+}
+
+async function continueQqAliasFlow(state, options = {}) {
+  return generatedEmailHelpers.continueQqAliasFlow(state, options);
 }
 
 // ============================================================
@@ -5439,7 +5577,27 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
       if (attempt > 1) {
         await addLog(`${generatorLabel}：正在进行第 ${attempt}/${EMAIL_FETCH_MAX_ATTEMPTS} 次自动获取重试...`, 'warn');
       }
-      const generatedEmail = await fetchGeneratedEmail(currentState, { generateNew: true, generator });
+      const generatedEmailResult = await fetchGeneratedEmail(currentState, { generateNew: true, generator });
+      if (generatedEmailResult?.pendingAction) {
+        await addLog(`${generatorLabel}已暂停：${generatedEmailResult.pendingAction.message}`, 'warn');
+        await broadcastAutoRunStatus('waiting_email', {
+          currentRun: targetRun,
+          totalRuns,
+          attemptRun: attemptRuns,
+        });
+
+        await waitForResume();
+
+        const resumedState = await getState();
+        if (!resumedState.email) {
+          throw new Error('无法继续：当前没有邮箱地址。');
+        }
+        return resumedState.email;
+      }
+      const generatedEmail = generatedEmailResult?.email || '';
+      if (!generatedEmail) {
+        throw new Error(`${generatorLabel}未返回可用邮箱。`);
+      }
       await addLog(
         `=== 目标 ${targetRun}/${totalRuns} 轮：${generatorLabel}已就绪：${generatedEmail}（第 ${attemptRuns} 次尝试，第 ${attempt}/${EMAIL_FETCH_MAX_ATTEMPTS} 次获取）===`,
         'ok'
@@ -5540,7 +5698,27 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
       if (attempt > 1) {
         await addLog(`${generatorLabel}：正在进行第 ${attempt}/${EMAIL_FETCH_MAX_ATTEMPTS} 次自动获取重试...`, 'warn');
       }
-      const generatedEmail = await fetchGeneratedEmail(currentState, { generateNew: true, generator });
+      const generatedEmailResult = await fetchGeneratedEmail(currentState, { generateNew: true, generator });
+      if (generatedEmailResult?.pendingAction) {
+        await addLog(`${generatorLabel}已暂停：${generatedEmailResult.pendingAction.message}`, 'warn');
+        await broadcastAutoRunStatus('waiting_email', {
+          currentRun: targetRun,
+          totalRuns,
+          attemptRun: attemptRuns,
+        });
+
+        await waitForResume();
+
+        const resumedState = await getState();
+        if (!resumedState.email) {
+          throw new Error('无法继续：当前没有邮箱地址。');
+        }
+        return resumedState.email;
+      }
+      const generatedEmail = generatedEmailResult?.email || '';
+      if (!generatedEmail) {
+        throw new Error(`${generatorLabel}未返回可用邮箱。`);
+      }
       await addLog(
         `=== 目标 ${targetRun}/${totalRuns} 轮：${generatorLabel}已就绪：${generatedEmail}（第 ${attemptRuns} 次尝试，第 ${attempt}/${EMAIL_FETCH_MAX_ATTEMPTS} 次获取）===`,
         'ok'
@@ -6027,6 +6205,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   clearAutoRunTimerAlarm,
   clearLuckmailRuntimeState,
   clearStopRequest,
+  continueQqAliasFlow,
   closeLocalhostCallbackTabs,
   closeTabsByUrlPrefix,
   deleteHotmailAccount,
@@ -6239,7 +6418,12 @@ function getMailConfig(state) {
       injectSource: 'mail-2925',
     };
   }
-  return { source: 'qq-mail', url: 'https://wx.mail.qq.com/', label: 'QQ 邮箱' };
+  return {
+    source: 'qq-mail',
+    url: 'https://wx.mail.qq.com/',
+    label: 'QQ 邮箱',
+    navigateOnReuse: true,
+  };
 }
 
 function normalizeInbucketOrigin(rawValue) {

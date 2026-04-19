@@ -10,6 +10,7 @@
       DUCK_AUTOFILL_URL,
       fetch,
       fetchIcloudHideMyEmail,
+      clearQqAliasFlowState,
       getCloudflareTempEmailAddressFromResponse,
       getCloudflareTempEmailConfig,
       getState,
@@ -18,11 +19,23 @@
       normalizeCloudflareTempEmailAddress,
       normalizeEmailGenerator,
       isGeneratedAliasProvider,
+      getQqAliasAccountUrl,
+      QQ_ALIAS_ACCOUNT_URL,
+      QQ_ALIAS_EMAIL_GENERATOR,
       reuseOrCreateTab,
+      sendToContentScriptResilient,
+      setQqAliasPendingAction,
       sendToContentScript,
       setEmailState,
       throwIfStopped,
     } = deps;
+    const QQ_ALIAS_FLOW_MESSAGE_TYPE = 'QQ_ALIAS_FLOW';
+    const QQ_ALIAS_FLOW_STAGE_START = 'start';
+    const QQ_ALIAS_FLOW_STAGE_AFTER_TOKEN = 'after_token';
+    const QQ_ALIAS_FLOW_STAGE_AFTER_SLIDER = 'after_slider';
+    const QQ_ALIAS_FLOW_STAGE_OPEN_NEW_ALIAS = 'open_new_alias';
+    const QQ_ALIAS_FLOW_TIMEOUT_MS = 660000;
+    const QQ_ALIAS_CONTINUE_LABEL = '我已处理，继续';
 
     function generateCloudflareAliasLocalPart() {
       const letters = 'abcdefghijklmnopqrstuvwxyz';
@@ -43,6 +56,155 @@
       }
 
       return chars.join('');
+    }
+
+    function buildEmailResult(email = '') {
+      return { email: String(email || '').trim() };
+    }
+
+    function generateQqAliasLocalPart(length = 10) {
+      const letters = 'abcdefghijklmnopqrstuvwxyz';
+      const chars = [];
+      for (let i = 0; i < length; i++) {
+        chars.push(letters[Math.floor(Math.random() * letters.length)]);
+      }
+      return chars.join('');
+    }
+
+    function buildQqAliasPendingAction(pendingAction = {}) {
+      const reason = typeof pendingAction === 'string'
+        ? pendingAction
+        : String(pendingAction?.reason || '').trim();
+      if (reason === 'token_input') {
+        return {
+          id: Date.now(),
+          title: '手动处理 QQ 令牌',
+          message: 'QQ 别名等待超时，请在 QQ 邮箱页中输入 QQ 令牌，完成后回到面板点击“继续”。',
+          continueLabel: QQ_ALIAS_CONTINUE_LABEL,
+        };
+      }
+      if (reason === 'slider') {
+        return {
+          id: Date.now(),
+          title: '手动处理滑块验证',
+          message: 'QQ 别名等待超时，请在 QQ 邮箱页中完成滑块验证，完成后回到面板点击“继续”。',
+          continueLabel: QQ_ALIAS_CONTINUE_LABEL,
+        };
+      }
+
+      const title = String(pendingAction?.title || '').trim();
+      const message = String(pendingAction?.message || '').trim();
+      if (!title || !message) {
+        throw new Error('QQ 别名流程未返回可识别的人工确认信息。');
+      }
+
+      return {
+        id: Date.now(),
+        title,
+        message,
+        continueLabel: String(pendingAction?.continueLabel || '').trim() || QQ_ALIAS_CONTINUE_LABEL,
+      };
+    }
+
+    async function dispatchQqAliasFlow(stage, payload = {}) {
+      throwIfStopped();
+      const normalizedStage = String(stage || '').trim();
+      if (!normalizedStage) {
+        throw new Error('QQ 别名流程阶段为空。');
+      }
+
+      if (normalizedStage === QQ_ALIAS_FLOW_STAGE_START || normalizedStage === QQ_ALIAS_FLOW_STAGE_OPEN_NEW_ALIAS) {
+        const qqAliasAccountUrl = typeof getQqAliasAccountUrl === 'function'
+          ? await getQqAliasAccountUrl()
+          : QQ_ALIAS_ACCOUNT_URL;
+        await reuseOrCreateTab('qq-mail', qqAliasAccountUrl, { reloadIfSameUrl: true });
+      }
+
+      const message = {
+        type: QQ_ALIAS_FLOW_MESSAGE_TYPE,
+        source: 'background',
+        payload: {
+          stage: normalizedStage,
+          ...payload,
+        },
+      };
+
+      if (typeof sendToContentScriptResilient === 'function') {
+        return sendToContentScriptResilient('qq-mail', message, {
+          timeoutMs: QQ_ALIAS_FLOW_TIMEOUT_MS,
+          responseTimeoutMs: QQ_ALIAS_FLOW_TIMEOUT_MS,
+          retryDelayMs: 700,
+          logMessage: 'QQ 邮箱页正在切换，等待页面重新就绪后继续执行别名流程...',
+        });
+      }
+
+      return sendToContentScript('qq-mail', message);
+    }
+
+    async function finalizeQqAliasEmail(email = '') {
+      const normalizedEmail = String(email || '').trim().toLowerCase();
+      if (!normalizedEmail) {
+        throw new Error('QQ 别名流程未返回可用邮箱。');
+      }
+      await setEmailState(normalizedEmail);
+      await clearQqAliasFlowState({ lastGeneratedEmail: normalizedEmail });
+      await addLog(`QQ 别名：已生成 ${normalizedEmail}`, 'ok');
+      return buildEmailResult(normalizedEmail);
+    }
+
+    async function handleQqAliasStageResult(result, options = {}) {
+      if (result?.error) {
+        throw new Error(result.error);
+      }
+
+      if (result?.pendingAction) {
+        const pendingAction = await setQqAliasPendingAction(
+          buildQqAliasPendingAction(result.pendingAction),
+          result.continueStage
+        );
+        await addLog(`QQ 别名：${pendingAction.message}`, 'warn');
+        return { pendingAction };
+      }
+
+      if (result?.nextStage === QQ_ALIAS_FLOW_STAGE_OPEN_NEW_ALIAS) {
+        return dispatchQqAliasFlow(QQ_ALIAS_FLOW_STAGE_OPEN_NEW_ALIAS, {
+          localPart: String(options.localPart || '').trim().toLowerCase() || generateQqAliasLocalPart(),
+        }).then((nextResult) => handleQqAliasStageResult(nextResult));
+      }
+
+      if (result?.email) {
+        return finalizeQqAliasEmail(result.email);
+      }
+
+      throw new Error('QQ 别名流程未返回可识别结果。');
+    }
+
+    async function fetchQqAliasEmail(state, options = {}) {
+      throwIfStopped();
+      const latestState = state || await getState();
+      const provider = String(options.mailProvider || latestState?.mailProvider || '').trim().toLowerCase();
+      if (provider !== 'qq') {
+        throw new Error('QQ 别名仅支持在 QQ 邮箱服务下使用。');
+      }
+
+      await clearQqAliasFlowState();
+      await addLog('QQ 别名：正在打开邮箱设置页并准备处理旧别名...', 'info');
+      const result = await dispatchQqAliasFlow(QQ_ALIAS_FLOW_STAGE_START);
+      return handleQqAliasStageResult(result);
+    }
+
+    async function continueQqAliasFlow(state, options = {}) {
+      throwIfStopped();
+      const latestState = state || await getState();
+      const continueStage = String(options.continueStage || latestState?.qqAliasContinueStage || '').trim();
+      if (!continueStage) {
+        throw new Error('当前没有可继续的 QQ 别名流程。');
+      }
+
+      await clearQqAliasFlowState();
+      await addLog('QQ 别名：正在继续处理人工确认后的流程...', 'info');
+      const result = await dispatchQqAliasFlow(continueStage);
+      return handleQqAliasStageResult(result);
     }
 
     async function fetchCloudflareEmail(state, options = {}) {
@@ -211,25 +373,29 @@
       const currentState = state || await getState();
       const provider = String(options.mailProvider || currentState.mailProvider || '').trim().toLowerCase();
       if (isGeneratedAliasProvider?.(provider)) {
-        return fetchManagedAliasEmail(currentState, options);
+        return buildEmailResult(await fetchManagedAliasEmail(currentState, options));
       }
       const generator = normalizeEmailGenerator(options.generator ?? currentState.emailGenerator);
       if (generator === 'custom') {
         throw new Error('当前邮箱生成方式为自定义邮箱，请直接填写注册邮箱。');
       }
+      if (generator === QQ_ALIAS_EMAIL_GENERATOR) {
+        return fetchQqAliasEmail(currentState, options);
+      }
       if (generator === 'icloud') {
-        return fetchIcloudHideMyEmail();
+        return buildEmailResult(await fetchIcloudHideMyEmail());
       }
       if (generator === 'cloudflare') {
-        return fetchCloudflareEmail(currentState, options);
+        return buildEmailResult(await fetchCloudflareEmail(currentState, options));
       }
       if (generator === CLOUDFLARE_TEMP_EMAIL_GENERATOR) {
-        return fetchCloudflareTempEmailAddress(currentState, options);
+        return buildEmailResult(await fetchCloudflareTempEmailAddress(currentState, options));
       }
-      return fetchDuckEmail(options);
+      return buildEmailResult(await fetchDuckEmail(options));
     }
 
     return {
+      continueQqAliasFlow,
       ensureCloudflareTempEmailConfig,
       fetchCloudflareEmail,
       fetchCloudflareTempEmailAddress,

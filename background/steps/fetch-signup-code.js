@@ -91,7 +91,7 @@
         }
       }
 
-      const requestFreshCodeFirst = mail.provider !== HOTMAIL_PROVIDER && !isMail2925Flow;
+      const requestFreshCodeFirst = false;
       const resendIntervalMs = mail.provider === HOTMAIL_PROVIDER
         ? 0
         : STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS;

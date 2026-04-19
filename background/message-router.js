@@ -17,6 +17,7 @@
       clearAutoRunTimerAlarm,
       clearLuckmailRuntimeState,
       clearStopRequest,
+      continueQqAliasFlow,
       closeLocalhostCallbackTabs,
       closeTabsByUrlPrefix,
       deleteHotmailAccount,
@@ -558,9 +559,11 @@
           if (isAutoRunLockedState(state)) {
             throw new Error('自动流程运行中，当前不能手动获取邮箱。');
           }
-          const email = await fetchGeneratedEmail(state, message.payload || {});
-          await resumeAutoRun();
-          return { ok: true, email };
+          const result = await fetchGeneratedEmail(state, message.payload || {});
+          if (result?.email) {
+            await resumeAutoRun();
+          }
+          return { ok: true, ...(result || {}) };
         }
 
         case 'FETCH_DUCK_EMAIL': {
@@ -569,9 +572,21 @@
           if (isAutoRunLockedState(state)) {
             throw new Error('自动流程运行中，当前不能手动获取邮箱。');
           }
-          const email = await fetchGeneratedEmail(state, { ...(message.payload || {}), generator: 'duck' });
-          await resumeAutoRun();
-          return { ok: true, email };
+          const result = await fetchGeneratedEmail(state, { ...(message.payload || {}), generator: 'duck' });
+          if (result?.email) {
+            await resumeAutoRun();
+          }
+          return { ok: true, ...(result || {}) };
+        }
+
+        case 'CONTINUE_QQ_ALIAS_FLOW': {
+          clearStopRequest();
+          const state = await getState();
+          const result = await continueQqAliasFlow(state, message.payload || {});
+          if (result?.email) {
+            await resumeAutoRun();
+          }
+          return { ok: true, ...(result || {}) };
         }
 
         case 'CHECK_ICLOUD_SESSION': {

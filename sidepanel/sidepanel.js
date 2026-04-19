@@ -238,6 +238,7 @@ const HOTMAIL_SERVICE_MODE_LOCAL = 'local';
 const ICLOUD_PROVIDER = 'icloud';
 const GMAIL_PROVIDER = 'gmail';
 const LUCKMAIL_PROVIDER = 'luckmail-api';
+const QQ_ALIAS_EMAIL_GENERATOR = 'qq-alias';
 const DEFAULT_LUCKMAIL_BASE_URL = 'https://mails.luckyous.com';
 const DEFAULT_LUCKMAIL_EMAIL_TYPE = 'ms_graph';
 const DISPLAY_TIMEZONE = 'Asia/Shanghai';
@@ -1741,7 +1742,9 @@ function applySettingsState(state) {
   setMail2925Mode(state?.mail2925Mode);
   {
     const restoredEmailGenerator = String(state?.emailGenerator || '').trim().toLowerCase();
-    if (restoredEmailGenerator === 'icloud') {
+    if (restoredEmailGenerator === QQ_ALIAS_EMAIL_GENERATOR && String(state?.mailProvider || '').trim() === 'qq') {
+      selectEmailGenerator.value = QQ_ALIAS_EMAIL_GENERATOR;
+    } else if (restoredEmailGenerator === 'icloud') {
       selectEmailGenerator.value = 'icloud';
     } else if (restoredEmailGenerator === 'cloudflare') {
       selectEmailGenerator.value = 'cloudflare';
@@ -2288,6 +2291,9 @@ function getSelectedEmailGenerator() {
   if (generator === 'custom' || generator === 'manual') {
     return 'custom';
   }
+  if (generator === QQ_ALIAS_EMAIL_GENERATOR) {
+    return QQ_ALIAS_EMAIL_GENERATOR;
+  }
   if (generator === 'icloud') {
     return 'icloud';
   }
@@ -2322,6 +2328,14 @@ function getEmailGeneratorUiCopy() {
       placeholder: '点击生成 Cloudflare Temp Email，或手动粘贴邮箱',
       successVerb: '生成',
       label: 'Cloudflare Temp Email',
+    };
+  }
+  if (getSelectedEmailGenerator() === QQ_ALIAS_EMAIL_GENERATOR) {
+    return {
+      buttonLabel: '生成',
+      placeholder: '点击生成 QQ 别名，生成后会自动写入注册邮箱',
+      successVerb: '生成',
+      label: 'QQ 别名',
     };
   }
 
@@ -2373,6 +2387,35 @@ function getCurrentLuckmailPurchase(state = latestState) {
 
 function getCurrentLuckmailEmail(state = latestState) {
   return String(getCurrentLuckmailPurchase(state)?.email_address || '').trim();
+}
+
+function isQqAliasEmailGenerator(generator = getSelectedEmailGenerator()) {
+  return String(generator || '').trim().toLowerCase() === QQ_ALIAS_EMAIL_GENERATOR;
+}
+
+function syncQqAliasGeneratorAvailability() {
+  const qqAliasOption = selectEmailGenerator?.querySelector(`option[value="${QQ_ALIAS_EMAIL_GENERATOR}"]`);
+  if (!qqAliasOption) {
+    return;
+  }
+
+  const allowQqAlias = selectMailProvider.value === 'qq';
+  qqAliasOption.disabled = !allowQqAlias;
+  qqAliasOption.hidden = !allowQqAlias;
+  if (!allowQqAlias && selectEmailGenerator.value === QQ_ALIAS_EMAIL_GENERATOR) {
+    selectEmailGenerator.value = 'duck';
+  }
+}
+
+function isCurrentEmailManagedByQqAlias(state = latestState) {
+  const qqAliasEmail = String(state?.qqAliasLastGeneratedEmail || '').trim().toLowerCase();
+  if (!qqAliasEmail) {
+    return false;
+  }
+
+  const inputEmailValue = String(inputEmail.value || '').trim().toLowerCase();
+  const stateEmailValue = String(state?.email || '').trim().toLowerCase();
+  return inputEmailValue === qqAliasEmail || stateEmailValue === qqAliasEmail;
 }
 
 function getLuckmailUsedPurchases(state = latestState) {
@@ -2504,6 +2547,7 @@ function updateMailLoginButtonState() {
 }
 
 function updateMailProviderUI() {
+  syncQqAliasGeneratorAvailability();
   const use2925 = selectMailProvider.value === '2925';
   const useGmail = selectMailProvider.value === GMAIL_PROVIDER;
   const mail2925Mode = getSelectedMail2925Mode();
@@ -2526,6 +2570,7 @@ function updateMailProviderUI() {
   rowInbucketHost.style.display = useInbucket ? '' : 'none';
   rowInbucketMailbox.style.display = useInbucket ? '' : 'none';
   const selectedGenerator = getSelectedEmailGenerator();
+  const useQqAliasGenerator = selectedGenerator === QQ_ALIAS_EMAIL_GENERATOR;
   const useCloudflare = selectedGenerator === 'cloudflare';
   const useIcloud = selectedGenerator === 'icloud';
   const useCloudflareTempEmailGenerator = selectedGenerator === 'cloudflare-temp-email';
@@ -2614,6 +2659,9 @@ function updateMailProviderUI() {
       : (useGeneratedAlias
         ? '步骤 3 会自动生成邮箱，无需手动获取'
         : (useCustomEmail ? '请先填写自定义注册邮箱，成功一轮后会自动清空' : `先自动获取${uiCopy.label}，或手动粘贴邮箱后再继续`)));
+  }
+  if (autoHintText && useQqAliasGenerator) {
+    autoHintText.textContent = 'QQ 别名流程会自动打开设置页；遇到 QQ 令牌和滑块时，按提示手动处理后点“继续”。';
   }
   if (autoHintText && useGmail && useGeneratedAlias) {
     autoHintText.textContent = '请先填写 Gmail 原邮箱，步骤 3 会自动生成 Gmail +tag 地址';
@@ -2924,6 +2972,39 @@ function escapeHtml(text) {
   return div.innerHTML;
 }
 
+async function continuePendingQqAliasFlow(pendingAction = latestState?.qqAliasPendingAction) {
+  let currentPendingAction = pendingAction;
+
+  while (currentPendingAction) {
+    const confirmed = await openConfirmModal({
+      title: currentPendingAction.title || '继续 QQ 别名流程',
+      message: currentPendingAction.message || '请先完成页面中的人工操作，然后点击继续。',
+      confirmLabel: currentPendingAction.continueLabel || '继续',
+    });
+    if (!confirmed) {
+      showToast('QQ 别名流程已暂停，点击“生成”可继续。', 'info', 2200);
+      return null;
+    }
+
+    const response = await chrome.runtime.sendMessage({
+      type: 'CONTINUE_QQ_ALIAS_FLOW',
+      source: 'sidepanel',
+      payload: {},
+    });
+
+    if (response?.error) {
+      throw new Error(response.error);
+    }
+    if (response?.email) {
+      return response.email;
+    }
+
+    currentPendingAction = response?.pendingAction || null;
+  }
+
+  return null;
+}
+
 async function fetchGeneratedEmail(options = {}) {
   const { showFailureToast = true } = options;
   const uiCopy = getCurrentRegistrationEmailUiCopy();
@@ -2935,30 +3016,42 @@ async function fetchGeneratedEmail(options = {}) {
   btnFetchEmail.textContent = '...';
 
   try {
-    const response = await chrome.runtime.sendMessage({
-      type: 'FETCH_GENERATED_EMAIL',
-      source: 'sidepanel',
-      payload: {
-        generateNew: true,
-        generator: selectEmailGenerator.value,
-        mailProvider: selectMailProvider.value,
-        ...buildManagedAliasBaseEmailPayload(),
-      },
-    });
+    let email = '';
+    if (isQqAliasEmailGenerator() && latestState?.qqAliasPendingAction) {
+      email = await continuePendingQqAliasFlow(latestState.qqAliasPendingAction) || '';
+    } else {
+      const response = await chrome.runtime.sendMessage({
+        type: 'FETCH_GENERATED_EMAIL',
+        source: 'sidepanel',
+        payload: {
+          generateNew: true,
+          generator: selectEmailGenerator.value,
+          mailProvider: selectMailProvider.value,
+          ...buildManagedAliasBaseEmailPayload(),
+        },
+      });
 
-    if (response?.error) {
-      throw new Error(response.error);
-    }
-    if (!response?.email) {
-      throw new Error('未返回可用邮箱。');
+      if (response?.error) {
+        throw new Error(response.error);
+      }
+
+      if (response?.pendingAction && isQqAliasEmailGenerator()) {
+        email = await continuePendingQqAliasFlow(response.pendingAction) || '';
+      } else {
+        email = String(response?.email || '').trim();
+      }
     }
 
-    inputEmail.value = response.email;
+    if (!email) {
+      return null;
+    }
+
+    inputEmail.value = email;
     if (getSelectedEmailGenerator() === 'icloud') {
       queueIcloudAliasRefresh();
     }
-    showToast(`已${uiCopy.successVerb} ${uiCopy.label}：${response.email}`, 'success', 2500);
-    return response.email;
+    showToast(`已${uiCopy.successVerb} ${uiCopy.label}：${email}`, 'success', 2500);
+    return email;
   } catch (err) {
     if (showFailureToast) {
       showToast(`${uiCopy.label}${uiCopy.successVerb}失败：${err.message}`, 'error');
@@ -3386,6 +3479,9 @@ stepsList?.addEventListener('click', async (event) => {
             showToast(`自动获取失败：${err.message}，请手动粘贴邮箱后重试。`, 'warn');
             return;
           }
+          if (!email) {
+            return;
+          }
         }
         if (!validateCurrentRegistrationEmail(email, { showToastOnFailure: true })) {
           return;
@@ -3600,16 +3696,35 @@ btnAutoRun.addEventListener('click', async () => {
 });
 
 btnAutoContinue.addEventListener('click', async () => {
-  const email = inputEmail.value.trim();
-  if (!email) {
-    showToast(
-      isCustomMailProvider() ? '请先填写自定义注册邮箱。' : '请先获取或粘贴邮箱。',
-      'warn'
-    );
-    return;
+  try {
+    btnAutoContinue.disabled = true;
+
+    if (isQqAliasEmailGenerator() && latestState?.qqAliasPendingAction) {
+      const email = await continuePendingQqAliasFlow(latestState.qqAliasPendingAction) || '';
+      if (email) {
+        inputEmail.value = email;
+        autoContinueBar.style.display = 'none';
+        showToast(`已生成 QQ 别名：${email}`, 'success', 2500);
+      }
+      return;
+    }
+
+    const email = inputEmail.value.trim();
+    if (!email) {
+      showToast(
+        isCustomMailProvider() ? '请先填写自定义注册邮箱。' : '请先获取或粘贴邮箱。',
+        'warn'
+      );
+      return;
+    }
+
+    autoContinueBar.style.display = 'none';
+    await chrome.runtime.sendMessage({ type: 'RESUME_AUTO_RUN', source: 'sidepanel', payload: { email } });
+  } catch (err) {
+    showToast(err.message, 'error');
+  } finally {
+    btnAutoContinue.disabled = false;
   }
-  autoContinueBar.style.display = 'none';
-  await chrome.runtime.sendMessage({ type: 'RESUME_AUTO_RUN', source: 'sidepanel', payload: { email } });
 });
 
 btnAutoRunNow?.addEventListener('click', async () => {
@@ -3790,12 +3905,15 @@ selectMailProvider.addEventListener('change', async () => {
   const leavingLuckmail = previousProvider === LUCKMAIL_PROVIDER
     && nextProvider !== LUCKMAIL_PROVIDER
     && isCurrentEmailManagedByLuckmail();
+  const leavingQqAlias = previousProvider === 'qq'
+    && nextProvider !== 'qq'
+    && isCurrentEmailManagedByQqAlias();
   const leavingGeneratedAlias = (
     previousProvider !== nextProvider
     || (previousProvider === '2925' && normalizeMail2925Mode(previousMail2925Mode) !== getSelectedMail2925Mode())
   ) && usesGeneratedAliasMailProvider(previousProvider, previousMail2925Mode)
     && isCurrentEmailManagedByGeneratedAlias(previousProvider, latestState, previousMail2925Mode);
-  if (leavingHotmail || leavingLuckmail || leavingGeneratedAlias) {
+  if (leavingHotmail || leavingLuckmail || leavingQqAlias || leavingGeneratedAlias) {
     await clearRegistrationEmail({ silent: true }).catch(() => { });
   }
   if (nextProvider === LUCKMAIL_PROVIDER) {
