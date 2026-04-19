@@ -36,6 +36,7 @@
       flushCommand,
       getCurrentLuckmailPurchase,
       getPendingAutoRunTimerPlan,
+      getRuntimeBuildInfo,
       getSourceLabel,
       getState,
       getStopRequested,
@@ -279,6 +280,13 @@
 
         case 'GET_STATE': {
           return await getState();
+        }
+
+        case 'GET_RUNTIME_BUILD_INFO': {
+          const payload = typeof getRuntimeBuildInfo === 'function'
+            ? (getRuntimeBuildInfo() || {})
+            : {};
+          return { ok: true, payload };
         }
 
         case 'RESET': {

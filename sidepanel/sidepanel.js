@@ -25,6 +25,7 @@ const btnToggleAccountRecordsSelection = document.getElementById('btn-toggle-acc
 const btnDeleteSelectedAccountRecords = document.getElementById('btn-delete-selected-account-records');
 const updateSection = document.getElementById('update-section');
 const btnRepoHome = document.getElementById('btn-repo-home');
+const extensionVersionBlock = document.getElementById('extension-version-block');
 const extensionUpdateStatus = document.getElementById('extension-update-status');
 const extensionVersionMeta = document.getElementById('extension-version-meta');
 const extensionBuildMeta = document.getElementById('extension-build-meta');
@@ -64,7 +65,16 @@ const configMenu = document.getElementById('config-menu');
 const btnExportSettings = document.getElementById('btn-export-settings');
 const btnImportSettings = document.getElementById('btn-import-settings');
 const inputImportSettingsFile = document.getElementById('input-import-settings-file');
-const EXTENSION_BUILD_FILE_PATH = 'background.js';
+const EXTENSION_BUILD_FILE_PATHS = [
+  'manifest.json',
+  'background.js',
+  'background/verification-flow.js',
+  'background/steps/fetch-signup-code.js',
+  'background/steps/fetch-login-code.js',
+  'content/mail-2925.js',
+  'sidepanel/sidepanel.html',
+  'sidepanel/sidepanel.js',
+];
 const EXTENSION_BUILD_META_UNAVAILABLE_TEXT = '本地修改时间不可用';
 const selectPanelMode = document.getElementById('select-panel-mode');
 const rowVpsUrl = document.getElementById('row-vps-url');
@@ -178,6 +188,7 @@ const inputAutoDelayEnabled = document.getElementById('input-auto-delay-enabled'
 const inputAutoDelayMinutes = document.getElementById('input-auto-delay-minutes');
 const inputAutoStepDelaySeconds = document.getElementById('input-auto-step-delay-seconds');
 const inputVerificationResendCount = document.getElementById('input-verification-resend-count');
+const inputStep4RestartLimit = document.getElementById('input-step4-restart-limit');
 const inputAccountRunHistoryTextEnabled = document.getElementById('input-account-run-history-text-enabled');
 const rowAccountRunHistoryHelperBaseUrl = document.getElementById('row-account-run-history-helper-base-url');
 const inputAccountRunHistoryHelperBaseUrl = document.getElementById('input-account-run-history-helper-base-url');
@@ -210,6 +221,9 @@ const AUTO_STEP_DELAY_MAX_SECONDS = 600;
 const VERIFICATION_RESEND_COUNT_MIN = 0;
 const VERIFICATION_RESEND_COUNT_MAX = 20;
 const DEFAULT_VERIFICATION_RESEND_COUNT = 4;
+const STEP4_RESTART_LIMIT_MIN = 0;
+const STEP4_RESTART_LIMIT_MAX = 20;
+const DEFAULT_STEP4_RESTART_LIMIT = 3;
 const DEFAULT_LOCAL_CPA_STEP9_MODE = 'submit';
 const DEFAULT_CPA_CALLBACK_MODE = 'step8';
 const MAIL_2925_MODE_PROVIDE = 'provide';
@@ -1017,6 +1031,23 @@ function normalizeVerificationResendCount(value, fallback) {
   );
 }
 
+function normalizeStep4RestartLimit(value, fallback) {
+  const rawValue = String(value ?? '').trim();
+  if (!rawValue) {
+    return fallback;
+  }
+
+  const numeric = Number(rawValue);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+
+  return Math.min(
+    STEP4_RESTART_LIMIT_MAX,
+    Math.max(STEP4_RESTART_LIMIT_MIN, Math.floor(numeric))
+  );
+}
+
 function formatAutoStepDelayInputValue(value) {
   const normalized = normalizeAutoStepDelaySeconds(value);
   return normalized === null ? '' : String(normalized);
@@ -1358,6 +1389,10 @@ function collectSettingsPayload() {
     verificationResendCount: normalizeVerificationResendCount(
       inputVerificationResendCount?.value,
       DEFAULT_VERIFICATION_RESEND_COUNT
+    ),
+    step4RestartLimit: normalizeStep4RestartLimit(
+      inputStep4RestartLimit?.value,
+      DEFAULT_STEP4_RESTART_LIMIT
     ),
   };
 }
@@ -1761,6 +1796,11 @@ function applySettingsState(state) {
       normalizeVerificationResendCount(restoredVerificationResendCount, DEFAULT_VERIFICATION_RESEND_COUNT)
     );
   }
+  if (inputStep4RestartLimit) {
+    inputStep4RestartLimit.value = String(
+      normalizeStep4RestartLimit(state?.step4RestartLimit, DEFAULT_STEP4_RESTART_LIMIT)
+    );
+  }
   if (state?.autoRunTotalRuns) {
     inputRunCount.value = String(state.autoRunTotalRuns);
   }
@@ -1982,6 +2022,62 @@ function setExtensionBuildMetaText(text) {
   extensionBuildMeta.hidden = !extensionBuildMeta.textContent;
 }
 
+function setExtensionVersionBlockVisible(visible) {
+  if (!extensionVersionBlock) {
+    return;
+  }
+  extensionVersionBlock.hidden = !visible;
+}
+
+async function fetchRuntimeBuildInfo() {
+  const response = await chrome.runtime.sendMessage({
+    type: 'GET_RUNTIME_BUILD_INFO',
+    source: 'sidepanel',
+    payload: {},
+  });
+  if (!response?.ok) {
+    throw new Error(response?.error || '读取后台运行态版本失败');
+  }
+  return response.payload || {};
+}
+
+function getRuntimeVersionLabel(workerBuildId) {
+  const rawValue = String(workerBuildId || '').trim();
+  if (!rawValue) {
+    return '';
+  }
+  const formatter = sidepanelUpdateService?.formatDisplayVersion;
+  if (typeof formatter === 'function') {
+    return formatter(rawValue, 'pro') || rawValue;
+  }
+  return rawValue;
+}
+
+function applyRuntimeBuildInfo(runtimeBuildInfo) {
+  if (!extensionUpdateStatus || !extensionVersionMeta) {
+    return { workerBuildId: '', workerVersionLabel: '' };
+  }
+
+  const workerBuildId = String(runtimeBuildInfo?.workerBuildId || '').trim();
+  const workerVersionLabel = getRuntimeVersionLabel(workerBuildId);
+  const workerStartedAtText = formatDateTimeForHeader(runtimeBuildInfo?.workerStartedAt);
+
+  if (!workerBuildId) {
+    setExtensionVersionBlockVisible(false);
+    extensionUpdateStatus.textContent = '';
+    extensionVersionMeta.hidden = true;
+    extensionVersionMeta.textContent = '';
+    return { workerBuildId: '', workerVersionLabel: '' };
+  }
+
+  setExtensionVersionBlockVisible(true);
+  extensionUpdateStatus.textContent = workerBuildId;
+  extensionUpdateStatus.classList.add('is-version-label');
+  extensionVersionMeta.hidden = !workerStartedAtText;
+  extensionVersionMeta.textContent = workerStartedAtText ? `后台启动 ${workerStartedAtText}` : '';
+  return { workerBuildId, workerVersionLabel };
+}
+
 async function readPackageFileLastModified(path) {
   if (typeof chrome?.runtime?.getPackageDirectoryEntry !== 'function') {
     return 0;
@@ -2022,8 +2118,12 @@ async function readResourceLastModifiedHeader(path) {
 }
 
 async function initializeExtensionBuildMeta() {
-  const timestamp = await readPackageFileLastModified(EXTENSION_BUILD_FILE_PATH)
-    || await readResourceLastModifiedHeader(EXTENSION_BUILD_FILE_PATH);
+  let timestamp = 0;
+  for (const path of EXTENSION_BUILD_FILE_PATHS) {
+    const candidate = await readPackageFileLastModified(path)
+      || await readResourceLastModifiedHeader(path);
+    timestamp = Math.max(timestamp, candidate);
+  }
   const formatted = timestamp > 0 ? formatDateTimeForHeader(timestamp) : '';
   setExtensionBuildMetaText(formatted ? `本地修改 ${formatted}` : EXTENSION_BUILD_META_UNAVAILABLE_TEXT);
 }
@@ -2035,6 +2135,7 @@ function renderReleaseSnapshot(snapshot) {
     return;
   }
 
+  setExtensionVersionBlockVisible(false);
   extensionUpdateStatus.classList.remove('is-update-available', 'is-check-failed', 'is-version-label');
 
   const localVersionText = snapshot?.localVersion || '';
@@ -2049,6 +2150,7 @@ function renderReleaseSnapshot(snapshot) {
 
   switch (snapshot?.status) {
     case 'update-available': {
+      setExtensionVersionBlockVisible(true);
       extensionUpdateStatus.textContent = '有更新';
       extensionUpdateStatus.classList.add('is-update-available');
       if (btnReleaseLog) {
@@ -2077,25 +2179,17 @@ function renderReleaseSnapshot(snapshot) {
     }
 
     case 'latest': {
-      extensionUpdateStatus.textContent = localVersionText || 'Pro0.0';
-      extensionUpdateStatus.classList.add('is-version-label');
       resetUpdateCard();
       break;
     }
 
     case 'empty': {
-      extensionUpdateStatus.textContent = localVersionText || 'Pro0.0';
-      extensionUpdateStatus.classList.add('is-version-label');
       resetUpdateCard();
       break;
     }
 
     case 'error':
     default: {
-      extensionUpdateStatus.textContent = localVersionText || 'Pro0.0';
-      extensionUpdateStatus.classList.add('is-version-label', 'is-check-failed');
-      extensionVersionMeta.textContent = snapshot?.errorMessage || 'GitHub Releases 检查失败';
-      extensionVersionMeta.hidden = false;
       resetUpdateCard();
       break;
     }
@@ -2113,28 +2207,37 @@ async function initializeReleaseInfo() {
     return;
   }
 
-  const localVersion = sidepanelUpdateService?.getLocalVersionLabel?.(chrome.runtime.getManifest())
-    || chrome.runtime.getManifest()?.version_name
-    || (chrome.runtime.getManifest()?.version ? `v${chrome.runtime.getManifest().version}` : '');
-  extensionUpdateStatus.textContent = localVersion || 'Pro0.0';
-  extensionUpdateStatus.classList.remove('is-update-available', 'is-check-failed');
-  extensionUpdateStatus.classList.add('is-version-label');
+  setExtensionVersionBlockVisible(false);
+  extensionUpdateStatus.textContent = '';
+  extensionUpdateStatus.classList.remove('is-update-available', 'is-check-failed', 'is-version-label');
   extensionVersionMeta.hidden = true;
   extensionVersionMeta.textContent = '';
   if (btnReleaseLog) {
     btnReleaseLog.hidden = true;
   }
+  setExtensionBuildMetaText('');
   resetUpdateCard();
-  await initializeExtensionBuildMeta();
+
+  let runtimeBuildInfo = null;
+  let runtimeVersionLabel = '';
+  try {
+    runtimeBuildInfo = await fetchRuntimeBuildInfo();
+    runtimeVersionLabel = applyRuntimeBuildInfo(runtimeBuildInfo).workerVersionLabel;
+  } catch (error) {
+    console.error('Failed to initialize runtime build info:', error);
+  }
 
   if (!sidepanelUpdateService) {
-    extensionVersionMeta.textContent = '更新检查服务不可用';
-    extensionVersionMeta.hidden = false;
     return;
   }
 
-  const snapshot = await sidepanelUpdateService.getReleaseSnapshot();
+  const snapshot = await sidepanelUpdateService.getReleaseSnapshot({
+    localVersion: runtimeVersionLabel,
+  });
   renderReleaseSnapshot(snapshot);
+  if (runtimeBuildInfo) {
+    applyRuntimeBuildInfo(runtimeBuildInfo);
+  }
 }
 
 function syncPasswordField(state) {
@@ -4020,6 +4123,20 @@ inputVerificationResendCount?.addEventListener('blur', () => {
   saveSettings({ silent: true }).catch(() => { });
 });
 
+inputStep4RestartLimit?.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputStep4RestartLimit?.addEventListener('blur', () => {
+  inputStep4RestartLimit.value = String(
+    normalizeStep4RestartLimit(
+      inputStep4RestartLimit.value,
+      DEFAULT_STEP4_RESTART_LIMIT
+    )
+  );
+  saveSettings({ silent: true }).catch(() => { });
+});
+
 // ============================================================
 // Listen for Background broadcasts
 // ============================================================
@@ -4243,6 +4360,14 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
           normalizeVerificationResendCount(
             nextVerificationResendCount,
             DEFAULT_VERIFICATION_RESEND_COUNT
+          )
+        );
+      }
+      if (message.payload.step4RestartLimit !== undefined && inputStep4RestartLimit) {
+        inputStep4RestartLimit.value = String(
+          normalizeStep4RestartLimit(
+            message.payload.step4RestartLimit,
+            DEFAULT_STEP4_RESTART_LIMIT
           )
         );
       }

@@ -2,8 +2,6 @@
 // Injected dynamically on: 2925.com
 
 const MAIL2925_PREFIX = '[MultiPage:mail-2925]';
-const MAIL2925_SUBACCOUNT_LIMIT_ERROR_PREFIX = 'MAIL_2925_SUBACCOUNT_LIMIT::';
-const MAIL2925_SUBACCOUNT_LIMIT_USER_MESSAGE = '检测到 2925 邮箱通知：子账号数量已达上限，当前流程已停止，请处理后再重试。';
 const isTopFrame = window === window.top;
 
 console.log(MAIL2925_PREFIX, 'Content script loaded on', location.href, 'frame:', isTopFrame ? 'top' : 'child');
@@ -18,11 +16,6 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     handlePollEmail(message.step, message.payload).then((result) => {
       sendResponse(result);
     }).catch((err) => {
-      if (isMail2925SubaccountLimitError(err)) {
-        sendResponse({ error: err.message });
-        return;
-      }
-
       if (isStopError(err)) {
         log(`步骤 ${message.step}：已被用户停止。`, 'warn');
         sendResponse({ stopped: true, error: err.message });
@@ -89,6 +82,16 @@ function normalizeNodeText(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
 }
 
+function normalizeMinuteTimestamp(timestamp) {
+  if (!Number.isFinite(timestamp) || timestamp <= 0) {
+    return 0;
+  }
+
+  const date = new Date(timestamp);
+  date.setSeconds(0, 0);
+  return date.getTime();
+}
+
 function isMail2925SubaccountLimitNotice(text) {
   const normalized = normalizeNodeText(text);
   if (!normalized) {
@@ -97,14 +100,6 @@ function isMail2925SubaccountLimitNotice(text) {
 
   return normalized.includes('子账号数量已达上限通知')
     || (normalized.includes('重要提醒') && normalized.includes('子账号数量已达上限'));
-}
-
-function createMail2925SubaccountLimitError() {
-  return new Error(`${MAIL2925_SUBACCOUNT_LIMIT_ERROR_PREFIX}${MAIL2925_SUBACCOUNT_LIMIT_USER_MESSAGE}`);
-}
-
-function isMail2925SubaccountLimitError(error) {
-  return String(error?.message || '').startsWith(MAIL2925_SUBACCOUNT_LIMIT_ERROR_PREFIX);
 }
 
 function isVisibleNode(node) {
@@ -371,8 +366,11 @@ function isMailItemInCurrentWindow(itemId, knownMailIds, itemTimestamp, filterAf
     return !knownMailIds.has(itemId);
   }
 
-  if (Number.isFinite(itemTimestamp) && itemTimestamp > 0) {
-    return itemTimestamp >= filterAfterTimestamp;
+  const filterAfterMinute = normalizeMinuteTimestamp(filterAfterTimestamp);
+  const itemMinute = normalizeMinuteTimestamp(itemTimestamp);
+
+  if (itemMinute > 0 && filterAfterMinute > 0) {
+    return itemMinute >= filterAfterMinute;
   }
 
   return !knownMailIds.has(itemId);
@@ -496,6 +494,7 @@ async function handlePollEmail(step, payload) {
   } = payload || {};
   const excludedCodeSet = new Set(excludeCodes.filter(Boolean));
   const normalizedFilterAfterTimestamp = Math.max(0, Number(filterAfterTimestamp) || 0);
+  let sawMail2925SubaccountLimitNotice = false;
 
   log(`步骤 ${step}：开始轮询 2925 邮箱（最多 ${maxAttempts} 次）`);
 
@@ -541,20 +540,24 @@ async function handlePollEmail(step, payload) {
         const item = items[index];
         const itemId = getMailItemId(item);
         const itemTimestamp = parseMailItemTimestamp(item);
-
-        if (!isMailItemInCurrentWindow(
+        const previewText = getMailItemText(item);
+        if (isMail2925SubaccountLimitNotice(previewText)) {
+          if (!sawMail2925SubaccountLimitNotice) {
+            sawMail2925SubaccountLimitNotice = true;
+            log(`步骤 ${step}：检测到 2925 邮箱上限通知，继续完成当前验证码重试；若本轮最终耗尽，将按上限处理。`, 'warn');
+          }
+        }
+        const isCurrentRoundMail = isMailItemInCurrentWindow(
           itemId,
           knownMailIds,
           itemTimestamp,
           normalizedFilterAfterTimestamp
-        )) {
+        );
+
+        if (!isCurrentRoundMail) {
           continue;
         }
 
-        const previewText = getMailItemText(item);
-        if (isMail2925SubaccountLimitNotice(previewText)) {
-          throw createMail2925SubaccountLimitError();
-        }
         if (!matchesMailFilters(previewText, senderFilters, subjectFilters)) {
           continue;
         }
@@ -575,7 +578,12 @@ async function handlePollEmail(step, payload) {
         const source = bodyCode ? '新邮件正文' : '新邮件';
         const timeLabel = itemTimestamp ? `，时间：${new Date(itemTimestamp).toLocaleString('zh-CN', { hour12: false })}` : '';
         log(`步骤 ${step}：已找到验证码：${candidateCode}（来源：${source}${timeLabel}）`, 'ok');
-        return { ok: true, code: candidateCode, emailTimestamp: Date.now() };
+        return {
+          ok: true,
+          code: candidateCode,
+          emailTimestamp: Date.now(),
+          sawMail2925SubaccountLimitNotice,
+        };
       }
 
       items.forEach((item) => {
@@ -588,9 +596,10 @@ async function handlePollEmail(step, payload) {
     }
   }
 
-  throw new Error(
-    `${(maxAttempts * intervalMs / 1000).toFixed(0)} 秒后仍未在 2925 邮箱中找到新的匹配邮件。请手动检查收件箱。`
-  );
+  return {
+    error: `${(maxAttempts * intervalMs / 1000).toFixed(0)} 秒后仍未在 2925 邮箱中找到新的匹配邮件。请手动检查收件箱。`,
+    sawMail2925SubaccountLimitNotice,
+  };
 }
 
 }

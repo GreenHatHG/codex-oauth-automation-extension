@@ -23,6 +23,7 @@
 
     async function executeStep4(state) {
       const mail = getMailConfig(state);
+      const isMail2925Flow = mail.provider === '2925' || String(state?.mailProvider || '').trim() === '2925';
       if (mail.error) throw new Error(mail.error);
       const stepStartedAt = Date.now();
       const signupTabId = await getTabId('signup-page');
@@ -90,10 +91,15 @@
         }
       }
 
-      const requestFreshCodeFirst = mail.provider !== HOTMAIL_PROVIDER && mail.provider !== '2925';
+      const requestFreshCodeFirst = mail.provider !== HOTMAIL_PROVIDER && !isMail2925Flow;
       const resendIntervalMs = mail.provider === HOTMAIL_PROVIDER
         ? 0
         : STANDARD_MAIL_VERIFICATION_RESEND_INTERVAL_MS;
+
+      await addLog(
+        `步骤 4：邮箱通道诊断 mail.provider=${mail.provider || '空'} state.mailProvider=${String(state?.mailProvider || '').trim() || '空'} requestFreshCodeFirst=${requestFreshCodeFirst ? 'yes' : 'no'}`,
+        'info'
+      );
 
       await resolveVerificationStep(4, state, mail, {
         filterAfterTimestamp: stepStartedAt,

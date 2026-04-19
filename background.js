@@ -115,6 +115,8 @@ const {
 } = self.MultiPageActivationUtils;
 
 const LOG_PREFIX = '[MultiPage:bg]';
+const BACKGROUND_RUNTIME_BUILD_MARK = 'Pro3.3.1-runtime-ui-20260419';
+const BACKGROUND_RUNTIME_STARTED_AT = Date.now();
 const DUCK_AUTOFILL_URL = 'https://duckduckgo.com/email/settings/autofill';
 const ICLOUD_SETUP_URLS = [
   'https://setup.icloud.com.cn/setup/ws/1',
@@ -136,6 +138,7 @@ const CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX = 'CF_SECURITY_BLOCKED::';
 const CLOUDFLARE_SECURITY_BLOCK_USER_MESSAGE = '您已触发Cloudflare 安全防护系统，已完全停止流程，请不要短时间内多次进行重新发送验证码，连续刷新、反复点击重试会加重风控；请先关闭页面等待 15-30 分钟，让系统的临时限制自动解除。或者更换浏览器';
 const MAIL_2925_SUBACCOUNT_LIMIT_ERROR_PREFIX = 'MAIL_2925_SUBACCOUNT_LIMIT::';
 const MAIL_2925_SUBACCOUNT_LIMIT_USER_MESSAGE = '检测到 2925 邮箱通知：子账号数量已达上限，当前流程已停止，请处理后再重试。';
+const MAIL_2925_STEP4_LIMIT_NOTICE_STATE_KEY = 'step4Mail2925SubaccountLimitNoticeSeen';
 const HUMAN_STEP_DELAY_MIN = 700;
 const HUMAN_STEP_DELAY_MAX = 2200;
 const STEP6_MAX_ATTEMPTS = 3;
@@ -143,6 +146,15 @@ const STEP7_MAIL_POLLING_RECOVERY_MAX_ATTEMPTS = 8;
 const OAUTH_FLOW_TIMEOUT_MS = 6 * 60 * 1000;
 const SUB2API_STEP1_RESPONSE_TIMEOUT_MS = 90000;
 const SUB2API_STEP9_RESPONSE_TIMEOUT_MS = 120000;
+
+console.log(LOG_PREFIX, 'Loaded runtime build', BACKGROUND_RUNTIME_BUILD_MARK);
+
+function getRuntimeBuildInfo() {
+  return {
+    workerBuildId: BACKGROUND_RUNTIME_BUILD_MARK,
+    workerStartedAt: BACKGROUND_RUNTIME_STARTED_AT,
+  };
+}
 const DEFAULT_SUB2API_URL = 'https://sub2api.hisence.fun/admin/accounts';
 const DEFAULT_SUB2API_GROUP_NAME = 'codex';
 const DEFAULT_SUB2API_PROXY_NAME = '';
@@ -160,6 +172,9 @@ const AUTO_STEP_DELAY_MAX_ALLOWED_SECONDS = 600;
 const VERIFICATION_RESEND_COUNT_MIN = 0;
 const VERIFICATION_RESEND_COUNT_MAX = 20;
 const DEFAULT_VERIFICATION_RESEND_COUNT = 4;
+const STEP4_RESTART_LIMIT_MIN = 0;
+const STEP4_RESTART_LIMIT_MAX = 20;
+const DEFAULT_STEP4_RESTART_LIMIT = 3;
 const LEGACY_AUTO_STEP_DELAY_KEYS = ['autoStepRandomDelayMinSeconds', 'autoStepRandomDelayMaxSeconds'];
 const LEGACY_VERIFICATION_RESEND_COUNT_KEYS = ['signupVerificationResendCount', 'loginVerificationResendCount'];
 const DEFAULT_LOCAL_CPA_STEP9_MODE = 'submit';
@@ -228,6 +243,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   autoRunDelayMinutes: 30,
   autoStepDelaySeconds: null,
   verificationResendCount: DEFAULT_VERIFICATION_RESEND_COUNT,
+  step4RestartLimit: DEFAULT_STEP4_RESTART_LIMIT,
   mailProvider: '163',
   mail2925Mode: DEFAULT_MAIL_2925_MODE,
   emailGenerator: 'duck',
@@ -386,6 +402,23 @@ function normalizeVerificationResendCount(value, fallback) {
   return Math.min(
     VERIFICATION_RESEND_COUNT_MAX,
     Math.max(VERIFICATION_RESEND_COUNT_MIN, Math.floor(numeric))
+  );
+}
+
+function normalizeStep4RestartLimit(value, fallback = DEFAULT_STEP4_RESTART_LIMIT) {
+  const rawValue = String(value ?? '').trim();
+  if (!rawValue) {
+    return fallback;
+  }
+
+  const numeric = Number(rawValue);
+  if (!Number.isFinite(numeric)) {
+    return fallback;
+  }
+
+  return Math.min(
+    STEP4_RESTART_LIMIT_MAX,
+    Math.max(STEP4_RESTART_LIMIT_MIN, Math.floor(numeric))
   );
 }
 
@@ -850,6 +883,8 @@ function normalizePersistentSettingValue(key, value) {
       return normalizeAutoStepDelaySeconds(value, PERSISTED_SETTING_DEFAULTS.autoStepDelaySeconds);
     case 'verificationResendCount':
       return normalizeVerificationResendCount(value, DEFAULT_VERIFICATION_RESEND_COUNT);
+    case 'step4RestartLimit':
+      return normalizeStep4RestartLimit(value, DEFAULT_STEP4_RESTART_LIMIT);
     case 'mailProvider':
       return normalizeMailProvider(value);
     case 'mail2925Mode':
@@ -3848,6 +3883,10 @@ function isMail2925SubaccountLimitError(error) {
   return getErrorMessage(error).startsWith(MAIL_2925_SUBACCOUNT_LIMIT_ERROR_PREFIX);
 }
 
+function didSeeMail2925Step4LimitNotice(state) {
+  return Boolean(state?.[MAIL_2925_STEP4_LIMIT_NOTICE_STATE_KEY]);
+}
+
 function isTerminalSecurityBlockedError(error) {
   return isCloudflareSecurityBlockedError(error) || isMail2925SubaccountLimitError(error);
 }
@@ -5049,6 +5088,18 @@ async function executeStep(step, options = {}) {
       await appendManualAccountRunRecordIfNeeded(`step${step}_stopped`, state, getErrorMessage(err));
       throw err;
     }
+    if (
+      step === 4
+      && String(state?.mailProvider || '').trim() === '2925'
+      && didSeeMail2925Step4LimitNotice(await getState())
+      && !isTerminalSecurityBlockedError(err)
+    ) {
+      await addLog('步骤 4：后台检测到 2925 邮箱上限状态标记，当前错误按上限直接终止流程。', 'error');
+      await handleCloudflareSecurityBlocked(
+        new Error(`${MAIL_2925_SUBACCOUNT_LIMIT_ERROR_PREFIX}${MAIL_2925_SUBACCOUNT_LIMIT_USER_MESSAGE}`)
+      );
+      throw new Error(STOP_ERROR_MESSAGE);
+    }
     if (isTerminalSecurityBlockedError(err)) {
       await handleCloudflareSecurityBlocked(err);
       throw new Error(STOP_ERROR_MESSAGE);
@@ -5530,6 +5581,7 @@ async function runAutoSequenceFromStep(startStep, context = {}) {
   let step4RestartCount = 0;
   let currentStartStep = startStep;
   let continueCurrentAttempt = continued;
+  const step4RestartLimit = normalizeStep4RestartLimit((await getState()).step4RestartLimit, DEFAULT_STEP4_RESTART_LIMIT);
 
   while (true) {
 
@@ -5589,12 +5641,19 @@ async function runAutoSequenceFromStep(startStep, context = {}) {
         const preservedEmail = String(preservedState.email || '').trim();
         const preservedPassword = String(preservedState.password || '').trim();
         const emailSuffix = preservedEmail ? `当前邮箱：${preservedEmail}；` : '';
+        if (step4RestartCount > step4RestartLimit) {
+          await addLog(
+            `步骤 4：沿用当前邮箱回到步骤 1 的重开次数已达到上限 ${step4RestartLimit} 次，停止继续内部重开。${emailSuffix}最后原因：${getErrorMessage(err)}`,
+            'error'
+          );
+          throw err;
+        }
         await addLog(
-          `步骤 4：执行失败，准备沿用当前邮箱回到步骤 1 重新开始（第 ${step4RestartCount} 次重开）。${emailSuffix}原因：${getErrorMessage(err)}`,
+          `步骤 4：执行失败，准备沿用当前邮箱回到步骤 1 重新开始（第 ${step4RestartCount}/${step4RestartLimit} 次重开）。${emailSuffix}原因：${getErrorMessage(err)}`,
           'warn'
         );
         await invalidateDownstreamAfterStepRestart(1, {
-          logLabel: `步骤 4 报错后准备回到步骤 1 沿用当前邮箱重试（第 ${step4RestartCount} 次重开）`,
+          logLabel: `步骤 4 报错后准备回到步骤 1 沿用当前邮箱重试（第 ${step4RestartCount}/${step4RestartLimit} 次重开）`,
         });
         const restorePayload = {};
         if (preservedEmail) restorePayload.email = preservedEmail;
@@ -5805,6 +5864,8 @@ const verificationFlowHelpers = self.MultiPageBackgroundVerificationFlow?.create
   HOTMAIL_PROVIDER,
   isStopError,
   LUCKMAIL_PROVIDER,
+  MAIL_2925_SUBACCOUNT_LIMIT_ERROR_PREFIX,
+  MAIL_2925_SUBACCOUNT_LIMIT_USER_MESSAGE,
   MAIL_2925_VERIFICATION_INTERVAL_MS,
   MAIL_2925_VERIFICATION_MAX_ATTEMPTS,
   pollCloudflareTempEmailVerificationCode,
@@ -5993,6 +6054,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   flushCommand,
   getCurrentLuckmailPurchase,
   getPendingAutoRunTimerPlan,
+  getRuntimeBuildInfo,
   getSourceLabel,
   getState,
   getStopRequested: () => stopRequested,

@@ -329,7 +329,9 @@
   }
 
   async function getReleaseSnapshot(options = {}) {
-    const localVersion = getLocalVersionLabel(chrome.runtime.getManifest()) || 'v0.0.0';
+    const localVersion = String(options?.localVersion || '').trim()
+      || getLocalVersionLabel(chrome.runtime.getManifest())
+      || 'v0.0.0';
 
     try {
       const releases = await loadReleases(options);

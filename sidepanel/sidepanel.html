@@ -23,7 +23,7 @@
           <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
         </svg>
       </button>
-      <div class="header-version-block">
+      <div id="extension-version-block" class="header-version-block" hidden>
         <div class="header-version-main">
           <button id="extension-update-status" class="header-version-title header-version-link" type="button"
             aria-label="打开 GitHub Releases 页面" title="打开 GitHub Releases 页面">Pro0.0</button>
@@ -310,6 +310,14 @@
               <span class="data-unit">次</span>
             </div>
           </div>
+        </div>
+      </div>
+      <div class="data-row">
+        <span class="data-label">步4重开</span>
+        <div class="data-inline">
+          <input type="number" id="input-step4-restart-limit" class="data-input auto-delay-input" value="3"
+            min="0" max="20" step="1" title="步骤 4 失败后沿用当前邮箱回到步骤 1 的最大重开次数" />
+          <span class="data-unit">次</span>
         </div>
       </div>
       <div class="data-row" id="row-account-run-history-helper-base-url" style="display:none;">

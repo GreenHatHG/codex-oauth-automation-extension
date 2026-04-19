@@ -15,6 +15,8 @@
       HOTMAIL_PROVIDER,
       isStopError,
       LUCKMAIL_PROVIDER,
+      MAIL_2925_SUBACCOUNT_LIMIT_ERROR_PREFIX = 'MAIL_2925_SUBACCOUNT_LIMIT::',
+      MAIL_2925_SUBACCOUNT_LIMIT_USER_MESSAGE = '检测到 2925 邮箱通知：子账号数量已达上限，当前流程已停止，请处理后再重试。',
       MAIL_2925_VERIFICATION_INTERVAL_MS,
       MAIL_2925_VERIFICATION_MAX_ATTEMPTS,
       pollCloudflareTempEmailVerificationCode,
@@ -80,6 +82,36 @@
       }
 
       return Math.max(0, Math.floor(Number(VERIFICATION_POLL_MAX_ROUNDS) || 1) - 1);
+    }
+
+    function didSeeMail2925SubaccountLimitNotice(value) {
+      return Boolean(value?.sawMail2925SubaccountLimitNotice);
+    }
+
+    function tagMail2925SubaccountLimitNotice(value, shouldTag = true) {
+      if (!shouldTag || !value || typeof value !== 'object') {
+        return value;
+      }
+
+      value.sawMail2925SubaccountLimitNotice = true;
+      return value;
+    }
+
+    function createMail2925SubaccountLimitError() {
+      return new Error(`${MAIL_2925_SUBACCOUNT_LIMIT_ERROR_PREFIX}${MAIL_2925_SUBACCOUNT_LIMIT_USER_MESSAGE}`);
+    }
+
+    const MAIL_2925_STEP4_LIMIT_NOTICE_STATE_KEY = 'step4Mail2925SubaccountLimitNoticeSeen';
+
+    function isMail2925VerificationFlow(mail, state) {
+      return mail?.provider === '2925'
+        || String(state?.mailProvider || '').trim() === '2925';
+    }
+
+    function shouldEscalateMail2925SubaccountLimitError(mail, state, error, sawNotice) {
+      return isMail2925VerificationFlow(mail, state)
+        && Boolean(sawNotice)
+        && !isStopError(error);
     }
 
     async function confirmCustomVerificationStepBypass(step) {
@@ -322,6 +354,7 @@
       );
       let lastResendAt = Number(pollOverrides.lastResendAt) || 0;
       let usedResendRequests = 0;
+      let sawMail2925SubaccountLimitNotice = false;
 
       for (let round = 1; round <= totalRounds; round++) {
         throwIfStopped();
@@ -370,28 +403,45 @@
               }
             );
 
+            if (didSeeMail2925SubaccountLimitNotice(result)) {
+              sawMail2925SubaccountLimitNotice = true;
+            }
+
             if (result && result.error) {
-              throw new Error(result.error);
+              throw tagMail2925SubaccountLimitNotice(
+                new Error(result.error),
+                sawMail2925SubaccountLimitNotice
+              );
             }
 
             if (!result || !result.code) {
-              throw new Error(`步骤 ${step}：邮箱轮询结束，但未获取到验证码。`);
+              throw tagMail2925SubaccountLimitNotice(
+                new Error(`步骤 ${step}：邮箱轮询结束，但未获取到验证码。`),
+                sawMail2925SubaccountLimitNotice
+              );
             }
 
             if (rejectedCodes.has(result.code)) {
-              throw new Error(`步骤 ${step}：再次收到了相同的${getVerificationCodeLabel(step)}验证码：${result.code}`);
+              throw tagMail2925SubaccountLimitNotice(
+                new Error(`步骤 ${step}：再次收到了相同的${getVerificationCodeLabel(step)}验证码：${result.code}`),
+                sawMail2925SubaccountLimitNotice
+              );
             }
 
             return {
               ...result,
               lastResendAt,
               remainingResendRequests: Math.max(0, maxResendRequests - usedResendRequests),
+              sawMail2925SubaccountLimitNotice,
             };
           } catch (err) {
             if (isStopError(err)) {
               throw err;
             }
-            lastError = err;
+            if (didSeeMail2925SubaccountLimitNotice(err)) {
+              sawMail2925SubaccountLimitNotice = true;
+            }
+            lastError = tagMail2925SubaccountLimitNotice(err, sawMail2925SubaccountLimitNotice);
             await addLog(`步骤 ${step}：${err.message}`, 'warn');
           }
 
@@ -414,7 +464,10 @@
         }
       }
 
-      throw lastError || new Error(`步骤 ${step}：无法获取新的${getVerificationCodeLabel(step)}验证码。`);
+      throw tagMail2925SubaccountLimitNotice(
+        lastError || new Error(`步骤 ${step}：无法获取新的${getVerificationCodeLabel(step)}验证码。`),
+        sawMail2925SubaccountLimitNotice
+      );
     }
 
     async function pollFreshVerificationCode(step, state, mail, pollOverrides = {}) {
@@ -467,6 +520,7 @@
       const maxResendRequests = resolveMaxResendRequests(pollOverrides);
       const maxRounds = maxResendRequests + 1;
       let usedResendRequests = 0;
+      let sawMail2925SubaccountLimitNotice = false;
 
       for (let round = 1; round <= maxRounds; round++) {
         throwIfStopped();
@@ -509,27 +563,44 @@
             }
           );
 
+          if (didSeeMail2925SubaccountLimitNotice(result)) {
+            sawMail2925SubaccountLimitNotice = true;
+          }
+
           if (result && result.error) {
-            throw new Error(result.error);
+            throw tagMail2925SubaccountLimitNotice(
+              new Error(result.error),
+              sawMail2925SubaccountLimitNotice
+            );
           }
 
           if (!result || !result.code) {
-            throw new Error(`步骤 ${step}：邮箱轮询结束，但未获取到验证码。`);
+            throw tagMail2925SubaccountLimitNotice(
+              new Error(`步骤 ${step}：邮箱轮询结束，但未获取到验证码。`),
+              sawMail2925SubaccountLimitNotice
+            );
           }
 
           if (rejectedCodes.has(result.code)) {
-            throw new Error(`步骤 ${step}：再次收到了相同的${getVerificationCodeLabel(step)}验证码：${result.code}`);
+            throw tagMail2925SubaccountLimitNotice(
+              new Error(`步骤 ${step}：再次收到了相同的${getVerificationCodeLabel(step)}验证码：${result.code}`),
+              sawMail2925SubaccountLimitNotice
+            );
           }
 
           return {
             ...result,
             remainingResendRequests: Math.max(0, maxResendRequests - usedResendRequests),
+            sawMail2925SubaccountLimitNotice,
           };
         } catch (err) {
           if (isStopError(err)) {
             throw err;
           }
-          lastError = err;
+          if (didSeeMail2925SubaccountLimitNotice(err)) {
+            sawMail2925SubaccountLimitNotice = true;
+          }
+          lastError = tagMail2925SubaccountLimitNotice(err, sawMail2925SubaccountLimitNotice);
           await addLog(`步骤 ${step}：${err.message}`, 'warn');
           if (round < maxRounds) {
             await addLog(`步骤 ${step}：将重新发送验证码后重试（${round + 1}/${maxRounds}）...`, 'warn');
@@ -537,7 +608,10 @@
         }
       }
 
-      throw lastError || new Error(`步骤 ${step}：无法获取新的${getVerificationCodeLabel(step)}验证码。`);
+      throw tagMail2925SubaccountLimitNotice(
+        lastError || new Error(`步骤 ${step}：无法获取新的${getVerificationCodeLabel(step)}验证码。`),
+        sawMail2925SubaccountLimitNotice
+      );
     }
 
     async function submitVerificationCode(step, code, options = {}) {
@@ -595,7 +669,19 @@
       const maxSubmitAttempts = 7;
       const resendIntervalMs = Math.max(0, Number(options.resendIntervalMs) || 0);
       let lastResendAt = Number(options.lastResendAt) || 0;
-      const useRollingFilterAfterTimestamp = mail.provider === '2925' && resendIntervalMs > 0;
+      let sawMail2925SubaccountLimitNotice = false;
+      const useRollingFilterAfterTimestamp = isMail2925VerificationFlow(mail, state) && resendIntervalMs > 0;
+      const rememberMail2925SubaccountLimitNotice = async (value) => {
+        if (didSeeMail2925SubaccountLimitNotice(value)) {
+          const shouldPersistNotice = !sawMail2925SubaccountLimitNotice
+            && step === 4
+            && isMail2925VerificationFlow(mail, state);
+          sawMail2925SubaccountLimitNotice = true;
+          if (shouldPersistNotice) {
+            await setState({ [MAIL_2925_STEP4_LIMIT_NOTICE_STATE_KEY]: true });
+          }
+        }
+      };
 
       const updateFilterAfterTimestampForVerificationStep = async (requestedAt) => {
         if (useRollingFilterAfterTimestamp && Number(requestedAt) > 0) {
@@ -604,25 +690,30 @@
         return nextFilterAfterTimestamp;
       };
 
-      if (requestFreshCodeFirst) {
-        if (remainingAutomaticResendCount <= 0) {
-          await addLog(`步骤 ${step}：当前自动重新发送验证码次数为 0，将直接使用当前时间窗口轮询邮箱。`, 'info');
-        } else {
-          try {
-            lastResendAt = await requestVerificationCodeResend(step, options);
-            remainingAutomaticResendCount -= 1;
-            await updateFilterAfterTimestampForVerificationStep(lastResendAt);
-            await addLog(`步骤 ${step}：已先请求一封新的${getVerificationCodeLabel(step)}验证码，再开始轮询邮箱。`, 'warn');
-          } catch (err) {
-            if (isStopError(err)) {
-              throw err;
+      try {
+        if (step === 4) {
+          await setState({ [MAIL_2925_STEP4_LIMIT_NOTICE_STATE_KEY]: false });
+        }
+
+        if (requestFreshCodeFirst) {
+          if (remainingAutomaticResendCount <= 0) {
+            await addLog(`步骤 ${step}：当前自动重新发送验证码次数为 0，将直接使用当前时间窗口轮询邮箱。`, 'info');
+          } else {
+            try {
+              lastResendAt = await requestVerificationCodeResend(step, options);
+              remainingAutomaticResendCount -= 1;
+              await updateFilterAfterTimestampForVerificationStep(lastResendAt);
+              await addLog(`步骤 ${step}：已先请求一封新的${getVerificationCodeLabel(step)}验证码，再开始轮询邮箱。`, 'warn');
+            } catch (err) {
+              if (isStopError(err)) {
+                throw err;
+              }
+              await addLog(`步骤 ${step}：首次重新获取验证码失败：${err.message}，将继续使用当前时间窗口轮询。`, 'warn');
             }
-            await addLog(`步骤 ${step}：首次重新获取验证码失败：${err.message}，将继续使用当前时间窗口轮询。`, 'warn');
           }
         }
-      }
 
-      if (mail.provider === HOTMAIL_PROVIDER) {
+        if (mail.provider === HOTMAIL_PROVIDER) {
           const initialDelayMs = Number(options.initialDelayMs ?? hotmailPollConfig.initialDelayMs) || 0;
           if (initialDelayMs > 0) {
             const remainingMs = await getRemainingTimeBudgetMs(
@@ -650,7 +741,9 @@
           if (nextFilterAfterTimestamp !== null && nextFilterAfterTimestamp !== undefined) {
             pollOptions.filterAfterTimestamp = nextFilterAfterTimestamp;
           }
+
           const result = await pollFreshVerificationCode(step, state, mail, pollOptions);
+          await rememberMail2925SubaccountLimitNotice(result);
           lastResendAt = Number(result?.lastResendAt) || lastResendAt;
           remainingAutomaticResendCount = normalizeVerificationResendCount(
             result?.remainingResendRequests,
@@ -668,8 +761,8 @@
             });
           }
           throwIfStopped();
-          const submitResult = await submitVerificationCode(step, result.code, options);
 
+          const submitResult = await submitVerificationCode(step, result.code, options);
           if (submitResult.invalidCode) {
             rejectedCodes.add(result.code);
             await addLog(`步骤 ${step}：验证码被页面拒绝：${submitResult.errorText || result.code}`, 'warn');
@@ -718,22 +811,41 @@
           triggerPostSuccessMailboxCleanup(step, mail);
           return;
         }
+      } catch (err) {
+        await rememberMail2925SubaccountLimitNotice(err);
+        const shouldEscalateMail2925Limit = shouldEscalateMail2925SubaccountLimitError(
+          mail,
+          state,
+          err,
+          sawMail2925SubaccountLimitNotice
+        );
+        if (step === 4 && isMail2925VerificationFlow(mail, state)) {
+          await addLog(
+            `步骤 4：2925 上限升级诊断 provider=${mail?.provider || '空'} state=${String(state?.mailProvider || '').trim() || '空'} sawNotice=${sawMail2925SubaccountLimitNotice ? 'yes' : 'no'} escalate=${shouldEscalateMail2925Limit ? 'yes' : 'no'} error=${err?.message || err}`,
+            shouldEscalateMail2925Limit ? 'warn' : 'info'
+          );
+        }
+        if (shouldEscalateMail2925Limit) {
+          throw createMail2925SubaccountLimitError();
+        }
+        throw err;
       }
-
-      return {
-        confirmCustomVerificationStepBypass,
-        getVerificationCodeLabel,
-        getVerificationCodeStateKey,
-        getVerificationPollPayload,
-        pollFreshVerificationCode,
-        pollFreshVerificationCodeWithResendInterval,
-        requestVerificationCodeResend,
-        resolveVerificationStep,
-        submitVerificationCode,
-      };
     }
 
     return {
-      createVerificationFlowHelpers,
+      confirmCustomVerificationStepBypass,
+      getVerificationCodeLabel,
+      getVerificationCodeStateKey,
+      getVerificationPollPayload,
+      pollFreshVerificationCode,
+      pollFreshVerificationCodeWithResendInterval,
+      requestVerificationCodeResend,
+      resolveVerificationStep,
+      submitVerificationCode,
     };
-  });
+  }
+
+  return {
+    createVerificationFlowHelpers,
+  };
+});
