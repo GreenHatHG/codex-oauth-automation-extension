@@ -2,6 +2,8 @@
 // Injected dynamically on: 2925.com
 
 const MAIL2925_PREFIX = '[MultiPage:mail-2925]';
+const MAIL2925_SUBACCOUNT_LIMIT_ERROR_PREFIX = 'MAIL_2925_SUBACCOUNT_LIMIT::';
+const MAIL2925_SUBACCOUNT_LIMIT_USER_MESSAGE = '检测到 2925 邮箱通知：子账号数量已达上限，当前流程已停止，请处理后再重试。';
 const isTopFrame = window === window.top;
 
 console.log(MAIL2925_PREFIX, 'Content script loaded on', location.href, 'frame:', isTopFrame ? 'top' : 'child');
@@ -16,6 +18,11 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
     handlePollEmail(message.step, message.payload).then((result) => {
       sendResponse(result);
     }).catch((err) => {
+      if (isMail2925SubaccountLimitError(err)) {
+        sendResponse({ error: err.message });
+        return;
+      }
+
       if (isStopError(err)) {
         log(`步骤 ${message.step}：已被用户停止。`, 'warn');
         sendResponse({ stopped: true, error: err.message });
@@ -80,6 +87,24 @@ const MAIL_ACTION_CANDIDATE_SELECTORS = 'button, [role="button"], a, label, span
 
 function normalizeNodeText(value) {
   return String(value || '').replace(/\s+/g, ' ').trim();
+}
+
+function isMail2925SubaccountLimitNotice(text) {
+  const normalized = normalizeNodeText(text);
+  if (!normalized) {
+    return false;
+  }
+
+  return normalized.includes('子账号数量已达上限通知')
+    || (normalized.includes('重要提醒') && normalized.includes('子账号数量已达上限'));
+}
+
+function createMail2925SubaccountLimitError() {
+  return new Error(`${MAIL2925_SUBACCOUNT_LIMIT_ERROR_PREFIX}${MAIL2925_SUBACCOUNT_LIMIT_USER_MESSAGE}`);
+}
+
+function isMail2925SubaccountLimitError(error) {
+  return String(error?.message || '').startsWith(MAIL2925_SUBACCOUNT_LIMIT_ERROR_PREFIX);
 }
 
 function isVisibleNode(node) {
@@ -527,6 +552,9 @@ async function handlePollEmail(step, payload) {
         }
 
         const previewText = getMailItemText(item);
+        if (isMail2925SubaccountLimitNotice(previewText)) {
+          throw createMail2925SubaccountLimitError();
+        }
         if (!matchesMailFilters(previewText, senderFilters, subjectFilters)) {
           continue;
         }

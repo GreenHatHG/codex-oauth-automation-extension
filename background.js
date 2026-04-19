@@ -134,6 +134,8 @@ const HOTMAIL_MAILBOXES = ['INBOX', 'Junk'];
 const STOP_ERROR_MESSAGE = '流程已被用户停止。';
 const CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX = 'CF_SECURITY_BLOCKED::';
 const CLOUDFLARE_SECURITY_BLOCK_USER_MESSAGE = '您已触发Cloudflare 安全防护系统，已完全停止流程，请不要短时间内多次进行重新发送验证码，连续刷新、反复点击重试会加重风控；请先关闭页面等待 15-30 分钟，让系统的临时限制自动解除。或者更换浏览器';
+const MAIL_2925_SUBACCOUNT_LIMIT_ERROR_PREFIX = 'MAIL_2925_SUBACCOUNT_LIMIT::';
+const MAIL_2925_SUBACCOUNT_LIMIT_USER_MESSAGE = '检测到 2925 邮箱通知：子账号数量已达上限，当前流程已停止，请处理后再重试。';
 const HUMAN_STEP_DELAY_MIN = 700;
 const HUMAN_STEP_DELAY_MAX = 2200;
 const STEP6_MAX_ATTEMPTS = 3;
@@ -3842,8 +3844,12 @@ function isCloudflareSecurityBlockedError(error) {
   return getErrorMessage(error).startsWith(CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX);
 }
 
+function isMail2925SubaccountLimitError(error) {
+  return getErrorMessage(error).startsWith(MAIL_2925_SUBACCOUNT_LIMIT_ERROR_PREFIX);
+}
+
 function isTerminalSecurityBlockedError(error) {
-  return isCloudflareSecurityBlockedError(error);
+  return isCloudflareSecurityBlockedError(error) || isMail2925SubaccountLimitError(error);
 }
 
 function getCloudflareSecurityBlockedMessage(error) {
@@ -3855,14 +3861,24 @@ function getCloudflareSecurityBlockedMessage(error) {
 }
 
 function getTerminalSecurityBlockedMessage(error) {
+  const message = getErrorMessage(error);
+  if (message.startsWith(MAIL_2925_SUBACCOUNT_LIMIT_ERROR_PREFIX)) {
+    return message.slice(MAIL_2925_SUBACCOUNT_LIMIT_ERROR_PREFIX.length).trim() || MAIL_2925_SUBACCOUNT_LIMIT_USER_MESSAGE;
+  }
   return getCloudflareSecurityBlockedMessage(error);
 }
 
 function getTerminalSecurityBlockedAlertText(error) {
+  if (isMail2925SubaccountLimitError(error)) {
+    return '';
+  }
   return '检测到 Cloudflare 风控，请暂停当前操作。';
 }
 
 function getTerminalSecurityBlockedTitle(error) {
+  if (isMail2925SubaccountLimitError(error)) {
+    return '2925 邮箱子账号已满';
+  }
   return 'Cloudflare 风控拦截';
 }
 
@@ -3885,7 +3901,9 @@ async function handleCloudflareSecurityBlocked(error) {
   const message = getTerminalSecurityBlockedMessage(error);
   const alertText = getTerminalSecurityBlockedAlertText(error);
   await requestStop({ logMessage: message });
-  broadcastSecurityBlockedAlert(title, message, alertText);
+  if (alertText) {
+    broadcastSecurityBlockedAlert(title, message, alertText);
+  }
   return message;
 }
 
