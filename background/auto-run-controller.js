@@ -460,30 +460,42 @@
             const blockedByAddPhone = typeof isAddPhoneAuthFailure === 'function' && isAddPhoneAuthFailure(err);
             const canRetry = !blockedByAddPhone && autoRunSkipFailures && attemptRun < maxAttemptsForRound;
 
-            if (blockedByAddPhone) {
-              roundSummary.status = 'failed';
-              roundSummary.finalFailureReason = reason;
-            }
-
             await setState({
               autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
             });
 
             if (blockedByAddPhone) {
+              roundSummary.status = 'failed';
+              roundSummary.finalFailureReason = reason;
+              await setState({
+                autoRunRoundSummaries: serializeAutoRunRoundSummaries(totalRuns, roundSummaries),
+              });
               await appendRoundRecordIfNeeded('failed', reason);
               cancelPendingCommands('当前轮因认证流程进入 add-phone 已终止。');
               await broadcastStopToContentScripts();
+              if (!autoRunSkipFailures) {
+                await addLog(
+                  `第 ${targetRun}/${totalRuns} 轮触发 add-phone/手机号页，自动重试未开启，当前自动运行将停止。`,
+                  'warn'
+                );
+                stoppedEarly = true;
+                await broadcastAutoRunStatus('stopped', {
+                  currentRun: targetRun,
+                  totalRuns,
+                  attemptRun,
+                  sessionId: 0,
+                });
+                break;
+              }
+
+              await addLog(`第 ${targetRun}/${totalRuns} 轮触发 add-phone/手机号页，本轮将直接失败并跳过剩余重试。`, 'warn');
               await addLog(
-                `第 ${targetRun}/${totalRuns} 轮触发 add-phone/手机号页，当前自动运行将立即停止，不再重试或进入下一轮。`,
+                targetRun < totalRuns
+                  ? `第 ${targetRun}/${totalRuns} 轮因 add-phone/手机号页提前结束，自动流程将继续下一轮。`
+                  : `第 ${targetRun}/${totalRuns} 轮因 add-phone/手机号页提前结束，已无后续轮次，本次自动运行结束。`,
                 'warn'
               );
-              stoppedEarly = true;
-              await broadcastAutoRunStatus('stopped', {
-                currentRun: targetRun,
-                totalRuns,
-                attemptRun,
-                sessionId: 0,
-              });
+              forceFreshTabsNextRun = true;
               break;
             }
 

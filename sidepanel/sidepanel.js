@@ -21,7 +21,10 @@ const btnAccountRecordsPrev = document.getElementById('btn-account-records-prev'
 const btnAccountRecordsNext = document.getElementById('btn-account-records-next');
 const btnCloseAccountRecords = document.getElementById('btn-close-account-records');
 const btnClearAccountRecords = document.getElementById('btn-clear-account-records');
+const btnToggleAccountRecordsSelection = document.getElementById('btn-toggle-account-records-selection');
+const btnDeleteSelectedAccountRecords = document.getElementById('btn-delete-selected-account-records');
 const updateSection = document.getElementById('update-section');
+const btnRepoHome = document.getElementById('btn-repo-home');
 const extensionUpdateStatus = document.getElementById('extension-update-status');
 const extensionVersionMeta = document.getElementById('extension-version-meta');
 const btnReleaseLog = document.getElementById('btn-release-log');
@@ -43,6 +46,7 @@ const btnTogglePassword = document.getElementById('btn-toggle-password');
 const btnSaveSettings = document.getElementById('btn-save-settings');
 const btnStop = document.getElementById('btn-stop');
 const btnReset = document.getElementById('btn-reset');
+const btnContributionMode = document.getElementById('btn-contribution-mode');
 const stepsProgress = document.getElementById('steps-progress');
 const btnAutoRun = document.getElementById('btn-auto-run');
 const btnAutoContinue = document.getElementById('btn-auto-continue');
@@ -205,7 +209,6 @@ const VERIFICATION_RESEND_COUNT_MAX = 20;
 const DEFAULT_VERIFICATION_RESEND_COUNT = 4;
 const DEFAULT_LOCAL_CPA_STEP9_MODE = 'submit';
 const DEFAULT_CPA_CALLBACK_MODE = 'step8';
-const DEFAULT_SUB2API_PROXY_NAME = 'shadowrocket';
 const MAIL_2925_MODE_PROVIDE = 'provide';
 const MAIL_2925_MODE_RECEIVE = 'receive';
 const DEFAULT_MAIL_2925_MODE = MAIL_2925_MODE_PROVIDE;
@@ -222,6 +225,7 @@ const DEFAULT_LUCKMAIL_BASE_URL = 'https://mails.luckyous.com';
 const DEFAULT_LUCKMAIL_EMAIL_TYPE = 'ms_graph';
 const DISPLAY_TIMEZONE = 'Asia/Shanghai';
 const DEFAULT_ACCOUNT_RUN_HISTORY_HELPER_BASE_URL = 'http://127.0.0.1:17373';
+const CONTRIBUTION_UPLOAD_URL = 'https://apikey.qzz.io/';
 
 function getManagedAliasUtils() {
   return window.MultiPageManagedAliasUtils || null;
@@ -918,6 +922,12 @@ function syncAutoRunState(source = {}) {
   };
 }
 
+function isContributionButtonLocked() {
+  const statuses = getStepStatuses();
+  const anyRunning = Object.values(statuses).some((status) => status === 'running');
+  return anyRunning || isAutoRunLockedPhase() || isAutoRunPausedPhase() || isAutoRunScheduledPhase();
+}
+
 function isAutoRunLockedPhase() {
   return currentAutoRun.phase === 'running'
     || currentAutoRun.phase === 'waiting_step'
@@ -1310,7 +1320,7 @@ function collectSettingsPayload() {
     sub2apiEmail: inputSub2ApiEmail.value.trim(),
     sub2apiPassword: inputSub2ApiPassword.value,
     sub2apiGroupName: inputSub2ApiGroup.value.trim(),
-    sub2apiDefaultProxyName: inputSub2ApiDefaultProxy.value.trim() || DEFAULT_SUB2API_PROXY_NAME,
+    sub2apiDefaultProxyName: inputSub2ApiDefaultProxy.value.trim(),
     customPassword: inputPassword.value,
     mailProvider: selectMailProvider.value,
     mail2925Mode: getSelectedMail2925Mode(),
@@ -1681,7 +1691,7 @@ function applySettingsState(state) {
   inputSub2ApiEmail.value = state?.sub2apiEmail || '';
   inputSub2ApiPassword.value = state?.sub2apiPassword || '';
   inputSub2ApiGroup.value = state?.sub2apiGroupName || '';
-  inputSub2ApiDefaultProxy.value = state?.sub2apiDefaultProxyName || DEFAULT_SUB2API_PROXY_NAME;
+  inputSub2ApiDefaultProxy.value = state?.sub2apiDefaultProxyName || '';
   const restoredMailProvider = isCustomMailProvider(state?.mailProvider)
     || [ICLOUD_PROVIDER, 'hotmail-api', GMAIL_PROVIDER, 'luckmail-api', '163', '163-vip', 'qq', 'inbucket', '2925', 'cloudflare-temp-email'].includes(String(state?.mailProvider || '').trim())
     ? String(state?.mailProvider || '163').trim()
@@ -1814,6 +1824,51 @@ function openExternalUrl(url) {
   }
 
   window.open(targetUrl, '_blank', 'noopener');
+}
+
+function getRepositoryHomeUrl() {
+  const serviceRepositoryUrl = String(sidepanelUpdateService?.repositoryUrl || '').trim();
+  if (serviceRepositoryUrl) {
+    return serviceRepositoryUrl;
+  }
+
+  const releasesPageUrl = String(sidepanelUpdateService?.releasesPageUrl || '').trim();
+  if (releasesPageUrl) {
+    return releasesPageUrl.replace(/\/releases\/?$/, '');
+  }
+
+  return 'https://github.com/QLHazyCoder/codex-oauth-automation-extension';
+}
+
+function getReleaseListUrl() {
+  const snapshotReleaseListUrl = String(currentReleaseSnapshot?.releasesPageUrl || '').trim();
+  if (snapshotReleaseListUrl) {
+    return snapshotReleaseListUrl;
+  }
+
+  const serviceReleaseListUrl = String(sidepanelUpdateService?.releasesPageUrl || '').trim();
+  if (serviceReleaseListUrl) {
+    return serviceReleaseListUrl;
+  }
+
+  return `${getRepositoryHomeUrl()}/releases`;
+}
+
+function openRepositoryHomePage() {
+  openExternalUrl(getRepositoryHomeUrl());
+}
+
+function openReleaseListPage() {
+  openExternalUrl(getReleaseListUrl());
+}
+
+async function openContributionUploadPage() {
+  if (isContributionButtonLocked()) {
+    throw new Error('当前流程运行中，请先停止后再打开贡献页面。');
+  }
+
+  openExternalUrl(CONTRIBUTION_UPLOAD_URL);
+  return true;
 }
 
 function createUpdateNoteList(notes = []) {
@@ -2569,6 +2624,7 @@ function updateButtonStates() {
   if (btnIcloudDeleteUsed) btnIcloudDeleteUsed.disabled = disableIcloudControls || !hasDeletableUsedIcloudAliases();
   if (selectIcloudHostPreference) selectIcloudHostPreference.disabled = disableIcloudControls;
   if (checkboxAutoDeleteIcloud) checkboxAutoDeleteIcloud.disabled = disableIcloudControls;
+  if (btnContributionMode) btnContributionMode.disabled = isContributionButtonLocked();
   updateStopButtonState(anyRunning || autoScheduled || isAutoRunPausedPhase() || autoLocked);
 }
 
@@ -2924,8 +2980,10 @@ const accountRecordsManager = window.SidepanelAccountRecordsManager?.createAccou
     btnAccountRecordsNext,
     btnAccountRecordsPrev,
     btnClearAccountRecords,
+    btnDeleteSelectedAccountRecords,
     btnCloseAccountRecords,
     btnOpenAccountRecords,
+    btnToggleAccountRecordsSelection,
   },
   helpers: {
     escapeHtml,
@@ -3252,6 +3310,22 @@ btnStop.addEventListener('click', async () => {
 btnConfigMenu?.addEventListener('click', (event) => {
   event.stopPropagation();
   toggleConfigMenu();
+});
+
+btnContributionMode?.addEventListener('click', async () => {
+  try {
+    await openContributionUploadPage();
+  } catch (err) {
+    showToast(err.message, 'error');
+  }
+});
+
+btnRepoHome?.addEventListener('click', () => {
+  openRepositoryHomePage();
+});
+
+extensionUpdateStatus?.addEventListener('click', () => {
+  openReleaseListPage();
 });
 
 configMenu?.addEventListener('click', (event) => {
@@ -3894,6 +3968,17 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
         sendResponse({ error: err.message });
       });
       return true;
+    }
+
+    case 'SECURITY_BLOCKED_ALERT': {
+      openConfirmModal({
+        title: message.payload?.title || '流程已完全停止',
+        message: message.payload?.message || '检测到安全风控，当前流程已完全停止。',
+        alert: message.payload?.alert || { text: '检测到 Cloudflare 风控，请暂停当前操作。', tone: 'danger' },
+        confirmLabel: '我知道了',
+        confirmVariant: 'btn-danger',
+      }).catch(() => {});
+      break;
     }
 
     case 'LOG_ENTRY':

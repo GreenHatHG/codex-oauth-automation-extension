@@ -254,6 +254,30 @@
       return normalizeAccountRunHistory(nextHistory);
     }
 
+    function deleteAccountRunHistoryEntries(history, recordIds = []) {
+      const normalizedHistory = normalizeAccountRunHistory(history);
+      const normalizedIds = Array.isArray(recordIds)
+        ? recordIds
+          .map((value) => String(value || '').trim().toLowerCase())
+          .filter(Boolean)
+        : [];
+
+      if (!normalizedIds.length) {
+        return {
+          deletedCount: 0,
+          nextHistory: normalizedHistory,
+        };
+      }
+
+      const selectedIds = new Set(normalizedIds);
+      const nextHistory = normalizedHistory.filter((record) => !selectedIds.has(buildRecordId(record.recordId || record.email)));
+
+      return {
+        deletedCount: normalizedHistory.length - nextHistory.length,
+        nextHistory: normalizeAccountRunHistory(nextHistory),
+      };
+    }
+
     async function appendAccountRunHistoryRecord(status, stateOverride = null, reason = '') {
       const state = stateOverride || await getState();
       const record = buildAccountRunHistoryRecord(state, status, reason);
@@ -384,12 +408,42 @@
       };
     }
 
+    async function deleteAccountRunHistoryRecords(recordIds = [], stateOverride = null) {
+      const state = stateOverride || await getState();
+      const history = await getPersistedAccountRunHistory();
+      const { deletedCount, nextHistory } = deleteAccountRunHistoryEntries(history, recordIds);
+
+      if (!deletedCount) {
+        return {
+          deletedCount: 0,
+          remainingCount: history.length,
+        };
+      }
+
+      await setPersistedAccountRunHistory(nextHistory);
+
+      try {
+        const filePath = await syncAccountRunHistorySnapshot(nextHistory, state);
+        if (filePath) {
+          await addLog(`账号记录快照已同步到本地：${filePath}`, 'info');
+        }
+      } catch (err) {
+        await addLog(getErrorMessage(err), 'warn');
+      }
+
+      return {
+        deletedCount,
+        remainingCount: nextHistory.length,
+      };
+    }
+
     return {
       appendAccountRunRecord,
       appendAccountRunHistoryRecord,
       buildAccountRunHistoryRecord,
       buildAccountRunHistorySnapshotPayload,
       clearAccountRunHistory,
+      deleteAccountRunHistoryRecords,
       getPersistedAccountRunHistory,
       normalizeAccountRunHistory,
       normalizeAccountRunHistoryRecord,

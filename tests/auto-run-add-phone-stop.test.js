@@ -6,7 +6,7 @@ const source = fs.readFileSync('background/auto-run-controller.js', 'utf8');
 const globalScope = {};
 const api = new Function('self', `${source}; return self.MultiPageBackgroundAutoRunController;`)(globalScope);
 
-test('auto-run controller does not retry add-phone failures even when auto retry is enabled', async () => {
+test('auto-run controller skips add-phone failures to the next round instead of stopping when auto retry is enabled', async () => {
   const events = {
     logs: [],
     broadcasts: [],
@@ -123,7 +123,9 @@ test('auto-run controller does not retry add-phone failures even when auto retry
     },
     runAutoSequenceFromStep: async () => {
       events.runCalls += 1;
-      throw new Error('步骤 8：验证码提交后页面进入手机号页面，当前流程无法继续自动授权。 URL: https://auth.openai.com/add-phone');
+      if (events.runCalls === 1) {
+        throw new Error('步骤 8：验证码提交后页面进入手机号页面，当前流程无法继续自动授权。 URL: https://auth.openai.com/add-phone');
+      }
     },
     runtime,
     setState: async (updates = {}) => {
@@ -151,17 +153,18 @@ test('auto-run controller does not retry add-phone failures even when auto retry
     },
   });
 
-  await controller.autoRunLoop(1, {
+  await controller.autoRunLoop(2, {
     autoRunSkipFailures: true,
     mode: 'restart',
   });
 
-  assert.equal(events.runCalls, 1, 'add-phone fatal failure should stop before the next auto attempt starts');
+  assert.equal(events.runCalls, 2, 'add-phone failure should skip the current round and continue with the next round');
   assert.equal(events.broadcasts.some(({ phase }) => phase === 'retrying'), false, 'add-phone fatal failure should not enter retrying phase');
   assert.equal(events.accountRecords.length, 1, 'fatal add-phone should still persist a failed round record');
   assert.equal(events.accountRecords[0].status, 'failed');
   assert.match(events.accountRecords[0].reason, /add-phone/);
-  assert.ok(events.logs.some(({ message }) => /add-phone\/手机号页/.test(message)));
+  assert.ok(events.logs.some(({ message }) => /继续下一轮/.test(message)));
+  assert.equal(events.broadcasts.some(({ phase }) => phase === 'stopped'), false, 'add-phone failure should not stop the whole auto-run when skip failures is enabled');
   assert.equal(runtime.state.autoRunActive, false);
   assert.equal(runtime.state.autoRunSessionId, 0);
 });

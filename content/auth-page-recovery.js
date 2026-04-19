@@ -65,8 +65,9 @@
       const detailMatched = detailPattern instanceof RegExp
         ? detailPattern.test(text)
         : false;
+      const maxCheckAttemptsBlocked = /max_check_attempts/i.test(text);
 
-      if (!titleMatched && !detailMatched) {
+      if (!titleMatched && !detailMatched && !maxCheckAttemptsBlocked) {
         return null;
       }
 
@@ -77,6 +78,7 @@
         retryEnabled: isActionEnabled(retryButton),
         titleMatched,
         detailMatched,
+        maxCheckAttemptsBlocked,
       };
     }
 
@@ -113,16 +115,20 @@
     async function recoverAuthRetryPage(options = {}) {
       const {
         logLabel = '',
+        maxClickAttempts = 5,
         pathPatterns = [],
         pollIntervalMs = 250,
         step = null,
         timeoutMs = 12000,
         waitAfterClickMs = 3000,
       } = options;
-      const start = Date.now();
+      const maxIdlePolls = timeoutMs > 0
+        ? Math.max(1, Math.ceil(timeoutMs / Math.max(1, pollIntervalMs)))
+        : Number.POSITIVE_INFINITY;
       let clickCount = 0;
+      let idlePollCount = 0;
 
-      while (Date.now() - start < timeoutMs) {
+      while (clickCount < maxClickAttempts) {
         if (typeof throwIfStopped === 'function') {
           throwIfStopped();
         }
@@ -136,7 +142,14 @@
           };
         }
 
+        if (retryState.maxCheckAttemptsBlocked) {
+          throw new Error(
+            'CF_SECURITY_BLOCKED::您已触发Cloudflare 安全防护系统，已完全停止流程，请不要短时间内多次进行重新发送验证码，连续刷新、反复点击重试会加重风控；请先关闭页面等待 15-30 分钟，让系统的临时限制自动解除。或者更换浏览器'
+          );
+        }
+
         if (retryState.retryButton && retryState.retryEnabled) {
+          idlePollCount = 0;
           clickCount += 1;
           if (typeof log === 'function') {
             const prefix = logLabel || `步骤 ${step || '?'}：检测到重试页，正在点击“重试”恢复`;
@@ -161,11 +174,33 @@
           continue;
         }
 
+        idlePollCount += 1;
+        if (idlePollCount >= maxIdlePolls) {
+          throw new Error(
+            `${logLabel || `步骤 ${step || '?'}：重试页恢复`}超时：重试按钮长时间不可点击。URL: ${location.href}`
+          );
+        }
+
         await sleep(pollIntervalMs);
       }
 
+      const finalRetryState = getAuthTimeoutErrorPageState({ pathPatterns });
+      if (!finalRetryState) {
+        return {
+          recovered: clickCount > 0,
+          clickCount,
+          url: location.href,
+        };
+      }
+
+      if (finalRetryState.maxCheckAttemptsBlocked) {
+        throw new Error(
+          'CF_SECURITY_BLOCKED::您已触发Cloudflare 安全防护系统，已完全停止流程，请不要短时间内多次进行重新发送验证码，连续刷新、反复点击重试会加重风控；请先关闭页面等待 15-30 分钟，让系统的临时限制自动解除。或者更换浏览器'
+        );
+      }
+
       throw new Error(
-        `${logLabel || `步骤 ${step || '?'}：重试页恢复`}超时。URL: ${location.href}`
+        `${logLabel || `步骤 ${step || '?'}：重试页恢复`}失败：已连续点击“重试” ${maxClickAttempts} 次，页面仍未恢复。URL: ${location.href}`
       );
     }
 

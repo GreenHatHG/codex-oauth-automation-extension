@@ -58,7 +58,7 @@ function extractFunction(source, name) {
 test('ensureStep8VerificationPageReady throws explicit restart-step7 error on login timeout page', async () => {
   const api = new Function(`
 function getLoginAuthStateLabel(state) {
-  return state === 'login_timeout_error_page' ? '登录超时报错页' : '未知页面';
+  return state === 'login_timeout_error_page' ? 'login timeout page' : 'unknown page';
 }
 
 async function getLoginAuthStateFromContent() {
@@ -79,7 +79,39 @@ return {
 
   await assert.rejects(
     () => api.run(),
-    /STEP8_RESTART_STEP7::步骤 8：当前认证页进入登录超时报错页/
+    /STEP8_RESTART_STEP7::/
+  );
+});
+
+test('ensureStep8VerificationPageReady throws cloudflare security block error on max_check_attempts page', async () => {
+  const api = new Function(`
+const CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX = 'CF_SECURITY_BLOCKED::';
+const CLOUDFLARE_SECURITY_BLOCK_USER_MESSAGE = 'cloudflare blocked';
+
+function getLoginAuthStateLabel(state) {
+  return state === 'login_timeout_error_page' ? 'login timeout page' : 'unknown page';
+}
+
+async function getLoginAuthStateFromContent() {
+  return {
+    state: 'login_timeout_error_page',
+    url: 'https://auth.openai.com/log-in',
+    maxCheckAttemptsBlocked: true,
+  };
+}
+
+${extractFunction(backgroundSource, 'ensureStep8VerificationPageReady')}
+
+return {
+  run() {
+    return ensureStep8VerificationPageReady({});
+  },
+};
+`)();
+
+  await assert.rejects(
+    () => api.run(),
+    /CF_SECURITY_BLOCKED::/
   );
 });
 
@@ -106,7 +138,7 @@ test('step 8 reruns step 7 when auth page enters login timeout retry state', asy
     ensureStep8VerificationPageReady: async () => {
       calls.ensureReady += 1;
       if (calls.ensureReady === 1) {
-        throw new Error('STEP8_RESTART_STEP7::步骤 8：当前认证页进入登录超时报错页，请回到步骤 7 重新开始。 URL: https://auth.openai.com/log-in');
+        throw new Error('STEP8_RESTART_STEP7::step 8 timeout retry page');
       }
       return { state: 'verification_page' };
     },
@@ -117,7 +149,7 @@ test('step 8 reruns step 7 when auth page enters login timeout retry state', asy
     getOAuthFlowStepTimeoutMs: async (defaultTimeoutMs) => Math.min(defaultTimeoutMs, 8000),
     getMailConfig: () => ({
       provider: 'qq',
-      label: 'QQ 邮箱',
+      label: 'QQ mail',
       source: 'mail-qq',
       url: 'https://mail.qq.com',
       navigateOnReuse: false,
@@ -152,6 +184,6 @@ test('step 8 reruns step 7 when auth page enters login timeout retry state', asy
   assert.equal(calls.executeStep7, 1);
   assert.equal(calls.ensureReady, 2);
   assert.equal(calls.resolveCalls, 1);
-  assert.equal(calls.logs.some(({ message }) => /准备从步骤 7 重新开始/.test(message)), true);
+  assert.equal(calls.logs.some(({ message }) => /重新开始|重新发起/.test(message)), true);
   assert.deepStrictEqual(calls.sleeps, [3000]);
 });

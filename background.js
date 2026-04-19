@@ -132,6 +132,8 @@ const CLOUDFLARE_TEMP_EMAIL_PROVIDER = 'cloudflare-temp-email';
 const CLOUDFLARE_TEMP_EMAIL_GENERATOR = 'cloudflare-temp-email';
 const HOTMAIL_MAILBOXES = ['INBOX', 'Junk'];
 const STOP_ERROR_MESSAGE = '流程已被用户停止。';
+const CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX = 'CF_SECURITY_BLOCKED::';
+const CLOUDFLARE_SECURITY_BLOCK_USER_MESSAGE = '您已触发Cloudflare 安全防护系统，已完全停止流程，请不要短时间内多次进行重新发送验证码，连续刷新、反复点击重试会加重风控；请先关闭页面等待 15-30 分钟，让系统的临时限制自动解除。或者更换浏览器';
 const HUMAN_STEP_DELAY_MIN = 700;
 const HUMAN_STEP_DELAY_MAX = 2200;
 const STEP6_MAX_ATTEMPTS = 3;
@@ -141,7 +143,7 @@ const SUB2API_STEP1_RESPONSE_TIMEOUT_MS = 90000;
 const SUB2API_STEP9_RESPONSE_TIMEOUT_MS = 120000;
 const DEFAULT_SUB2API_URL = 'https://sub2api.hisence.fun/admin/accounts';
 const DEFAULT_SUB2API_GROUP_NAME = 'codex';
-const DEFAULT_SUB2API_PROXY_NAME = 'shadowrocket';
+const DEFAULT_SUB2API_PROXY_NAME = '';
 const DEFAULT_SUB2API_REDIRECT_URI = 'http://localhost:1455/auth/callback';
 const AUTO_RUN_TIMER_ALARM_NAME = 'auto-run-timer';
 const AUTO_RUN_TIMER_KIND_SCHEDULED_START = 'scheduled_start';
@@ -832,7 +834,7 @@ function normalizePersistentSettingValue(key, value) {
     case 'sub2apiGroupName':
       return String(value || '').trim();
     case 'sub2apiDefaultProxyName':
-      return String(value || '').trim() || DEFAULT_SUB2API_PROXY_NAME;
+      return String(value || '').trim();
     case 'customPassword':
       return String(value || '');
     case 'autoRunSkipFailures':
@@ -3836,6 +3838,57 @@ function getErrorMessage(error) {
   return String(typeof error === 'string' ? error : error?.message || '');
 }
 
+function isCloudflareSecurityBlockedError(error) {
+  return getErrorMessage(error).startsWith(CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX);
+}
+
+function isTerminalSecurityBlockedError(error) {
+  return isCloudflareSecurityBlockedError(error);
+}
+
+function getCloudflareSecurityBlockedMessage(error) {
+  const message = getErrorMessage(error);
+  if (message.startsWith(CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX)) {
+    return message.slice(CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX.length).trim() || CLOUDFLARE_SECURITY_BLOCK_USER_MESSAGE;
+  }
+  return CLOUDFLARE_SECURITY_BLOCK_USER_MESSAGE;
+}
+
+function getTerminalSecurityBlockedMessage(error) {
+  return getCloudflareSecurityBlockedMessage(error);
+}
+
+function getTerminalSecurityBlockedAlertText(error) {
+  return '检测到 Cloudflare 风控，请暂停当前操作。';
+}
+
+function getTerminalSecurityBlockedTitle(error) {
+  return 'Cloudflare 风控拦截';
+}
+
+function broadcastSecurityBlockedAlert(title = '流程已完全停止', message = CLOUDFLARE_SECURITY_BLOCK_USER_MESSAGE, alertText = '检测到 Cloudflare 风控，请暂停当前操作。') {
+  chrome.runtime.sendMessage({
+    type: 'SECURITY_BLOCKED_ALERT',
+    payload: {
+      title,
+      message,
+      alert: {
+        text: alertText,
+        tone: 'danger',
+      },
+    },
+  }).catch(() => { });
+}
+
+async function handleCloudflareSecurityBlocked(error) {
+  const title = getTerminalSecurityBlockedTitle(error);
+  const message = getTerminalSecurityBlockedMessage(error);
+  const alertText = getTerminalSecurityBlockedAlertText(error);
+  await requestStop({ logMessage: message });
+  broadcastSecurityBlockedAlert(title, message, alertText);
+  return message;
+}
+
 function isVerificationMailPollingError(error) {
   if (typeof loggingStatus !== 'undefined' && loggingStatus?.isVerificationMailPollingError) {
     return loggingStatus.isVerificationMailPollingError(error);
@@ -4619,6 +4672,7 @@ async function handleStepData(step, payload) {
       if (payload.sub2apiOAuthState !== undefined) updates.sub2apiOAuthState = payload.sub2apiOAuthState || null;
       if (payload.sub2apiGroupId !== undefined) updates.sub2apiGroupId = payload.sub2apiGroupId || null;
       if (payload.sub2apiDraftName !== undefined) updates.sub2apiDraftName = payload.sub2apiDraftName || null;
+      if (payload.sub2apiProxyId !== undefined) updates.sub2apiProxyId = payload.sub2apiProxyId || null;
       if (Object.keys(updates).length) {
         await setState(updates);
       }
@@ -4977,6 +5031,10 @@ async function executeStep(step, options = {}) {
       await appendManualAccountRunRecordIfNeeded(`step${step}_stopped`, state, getErrorMessage(err));
       throw err;
     }
+    if (isTerminalSecurityBlockedError(err)) {
+      await handleCloudflareSecurityBlocked(err);
+      throw new Error(STOP_ERROR_MESSAGE);
+    }
     if (!(deferRetryableTransportError && doesStepUseCompletionSignal(step) && isRetryableContentScriptTransportError(err))) {
       await setStepStatus(step, 'failed');
       await addLog(`步骤 ${step} 失败：${err.message}`, 'error');
@@ -5165,6 +5223,16 @@ async function clearAndBroadcastAccountRunHistory(stateOverride = null) {
   }
 
   const result = await accountRunHistoryHelpers.clearAccountRunHistory(stateOverride);
+  await broadcastAccountRunHistoryUpdate();
+  return result;
+}
+
+async function deleteAndBroadcastAccountRunHistoryRecords(recordIds = [], stateOverride = null) {
+  if (!accountRunHistoryHelpers?.deleteAccountRunHistoryRecords) {
+    return { deletedCount: 0, remainingCount: 0 };
+  }
+
+  const result = await accountRunHistoryHelpers.deleteAccountRunHistoryRecords(recordIds, stateOverride);
   await broadcastAccountRunHistoryUpdate();
   return result;
 }
@@ -5876,6 +5944,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   cancelScheduledAutoRun,
   checkIcloudSession,
   clearAccountRunHistory: (...args) => clearAndBroadcastAccountRunHistory(...args),
+  deleteAccountRunHistoryRecords: (...args) => deleteAndBroadcastAccountRunHistoryRecords(...args),
   clearAutoRunTimerAlarm,
   clearLuckmailRuntimeState,
   clearStopRequest,
@@ -5909,9 +5978,11 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   getSourceLabel,
   getState,
   getStopRequested: () => stopRequested,
+  handleCloudflareSecurityBlocked,
   handleAutoRunLoopUnhandledError,
   importSettingsBundle,
   invalidateDownstreamAfterStepRestart,
+  isCloudflareSecurityBlockedError: isTerminalSecurityBlockedError,
   isAutoRunLockedState,
   isHotmailProvider,
   isLocalhostOAuthCallbackUrl,
@@ -6445,6 +6516,10 @@ async function ensureStep8VerificationPageReady(options = {}) {
     return pageState;
   }
 
+  if (pageState.maxCheckAttemptsBlocked) {
+    throw new Error(`${CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX}${CLOUDFLARE_SECURITY_BLOCK_USER_MESSAGE}`);
+  }
+
   if (pageState.state === 'login_timeout_error_page') {
     const urlPart = pageState.url ? ` URL: ${pageState.url}` : '';
     throw new Error(`STEP8_RESTART_STEP7::步骤 8：当前认证页进入登录超时报错页，请回到步骤 7 重新开始。${urlPart}`.trim());
@@ -6593,6 +6668,9 @@ async function waitForStep8Ready(tabId, timeoutMs = STEP8_READY_WAIT_TIMEOUT_MS)
   while (Date.now() - start < timeoutMs) {
     throwIfStopped();
     const pageState = await getStep8PageState(tabId);
+    if (pageState?.maxCheckAttemptsBlocked) {
+      throw new Error(`${CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX}${CLOUDFLARE_SECURITY_BLOCK_USER_MESSAGE}`);
+    }
     if (pageState?.addPhonePage) {
       throw new Error('步骤 9：认证页进入了手机号页面，当前不是 OAuth 同意页，无法继续自动授权。');
     }
@@ -6768,6 +6846,9 @@ async function waitForStep8ClickEffect(tabId, baselineUrl, timeoutMs = STEP8_CLI
     }
 
     const pageState = await getStep8PageState(tabId);
+    if (pageState?.maxCheckAttemptsBlocked) {
+      throw new Error(`${CLOUDFLARE_SECURITY_BLOCK_ERROR_PREFIX}${CLOUDFLARE_SECURITY_BLOCK_USER_MESSAGE}`);
+    }
     if (pageState?.addPhonePage) {
       throw new Error('步骤 9：点击“继续”后页面跳到了手机号页面，当前流程无法继续自动授权。');
     }

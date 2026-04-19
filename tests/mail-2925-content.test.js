@@ -116,6 +116,7 @@ async function openMailAndDeleteAfterRead(item) {
   return item.id === 'new' ? 'Your ChatGPT code is 654321' : 'No code here';
 }
 
+async function ensureSeenCodesSession() {}
 function persistSeenCodes() {}
 function log() {}
 
@@ -199,6 +200,7 @@ async function openMailAndDeleteAfterRead(item) {
   return item.text;
 }
 
+async function ensureSeenCodesSession() {}
 function persistSeenCodes() {}
 function log() {}
 
@@ -222,6 +224,58 @@ return {
 
   assert.equal(result.code, '112233');
   assert.deepEqual(api.getReadAndDeleteCalls(), ['mail-1']);
+});
+
+test('ensureSeenCodesSession resets tried codes only when a new verification step session starts', async () => {
+  const bundle = [
+    extractFunction('buildSeenCodeSessionKey'),
+    extractFunction('ensureSeenCodesSession'),
+  ].join('\n');
+
+  const api = new Function(`
+let seenCodes = new Set(['111111']);
+let seenCodeSessionKey = '';
+let seenCodesReadyPromise = Promise.resolve();
+const persisted = [];
+
+async function persistSeenCodes() {
+  persisted.push({
+    sessionKey: seenCodeSessionKey,
+    codes: [...seenCodes],
+  });
+}
+
+${bundle}
+
+return {
+  ensureSeenCodesSession,
+  getSeenCodes() {
+    return [...seenCodes];
+  },
+  getSessionKey() {
+    return seenCodeSessionKey;
+  },
+  getPersisted() {
+    return persisted.slice();
+  },
+};
+`)();
+
+  await api.ensureSeenCodesSession(4, { filterAfterTimestamp: 1000 });
+  assert.equal(api.getSessionKey(), '4:1000');
+  assert.deepEqual(api.getSeenCodes(), []);
+
+  await api.ensureSeenCodesSession(4, { filterAfterTimestamp: 1000 });
+  assert.deepEqual(api.getPersisted(), [
+    { sessionKey: '4:1000', codes: [] },
+  ]);
+
+  await api.ensureSeenCodesSession(8, { filterAfterTimestamp: 2000 });
+  assert.equal(api.getSessionKey(), '8:2000');
+  assert.deepEqual(api.getPersisted(), [
+    { sessionKey: '4:1000', codes: [] },
+    { sessionKey: '8:2000', codes: [] },
+  ]);
 });
 
 test('openMailAndGetMessageText always returns to inbox after opening a 2925 message', async () => {

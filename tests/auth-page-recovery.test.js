@@ -65,7 +65,7 @@ function createRecoveryApi(state) {
 test('auth page recovery detects retry page state', () => {
   const state = {
     clickCount: 0,
-    pageText: 'Something went wrong. Operation timed out.',
+    pageText: 'Something went wrong. Please try again.',
     retryVisible: true,
   };
   const api = createRecoveryApi(state);
@@ -77,13 +77,14 @@ test('auth page recovery detects retry page state', () => {
   assert.equal(Boolean(snapshot), true);
   assert.equal(snapshot.retryEnabled, true);
   assert.equal(snapshot.titleMatched, true);
-  assert.equal(snapshot.detailMatched, true);
+  assert.equal(snapshot.detailMatched, false);
+  assert.equal(snapshot.maxCheckAttemptsBlocked, false);
 });
 
 test('auth page recovery clicks retry and waits until page recovers', async () => {
   const state = {
     clickCount: 0,
-    pageText: 'Something went wrong. Operation timed out.',
+    pageText: 'Something went wrong. Please try again.',
     retryVisible: true,
   };
   const api = createRecoveryApi(state);
@@ -107,7 +108,7 @@ test('auth page recovery clicks retry and waits until page recovers', async () =
 test('auth page recovery can click retry twice before page recovers', async () => {
   const state = {
     clickCount: 0,
-    pageText: 'Something went wrong. Operation timed out.',
+    pageText: 'Something went wrong. Please try again.',
     retryVisible: true,
     onClick(currentState) {
       if (currentState.clickCount >= 2) {
@@ -135,3 +136,49 @@ test('auth page recovery can click retry twice before page recovers', async () =
   assert.equal(state.clickCount, 2);
   assert.equal(state.retryVisible, false);
 });
+
+test('auth page recovery stops after five retry clicks when page does not recover', async () => {
+  const state = {
+    clickCount: 0,
+    pageText: 'Something went wrong. Please try again.',
+    retryVisible: true,
+    onClick() {},
+  };
+  const api = createRecoveryApi(state);
+
+  await assert.rejects(
+    () => api.recoverAuthRetryPage({
+      logLabel: '步骤 8：检测到重试页，正在点击“重试”恢复',
+      maxClickAttempts: 5,
+      pathPatterns: [/\/log-in(?:[/?#]|$)/i],
+      step: 8,
+      timeoutMs: 1000,
+      waitAfterClickMs: 10,
+      pollIntervalMs: 1,
+    }),
+    /已连续点击“重试” 5 次/
+  );
+
+  assert.equal(state.clickCount, 5);
+  assert.equal(state.retryVisible, true);
+});
+
+test('auth page recovery throws cloudflare security blocked error on max_check_attempts page', async () => {
+  const state = {
+    clickCount: 0,
+    pageText: 'Something went wrong. max_check_attempts reached.',
+    retryVisible: true,
+  };
+  const api = createRecoveryApi(state);
+
+  await assert.rejects(
+    () => api.recoverAuthRetryPage({
+      logLabel: '步骤 7：检测到登录超时报错，正在点击“重试”恢复当前页面',
+      pathPatterns: [/\/log-in(?:[/?#]|$)/i],
+      step: 7,
+      timeoutMs: 1000,
+    }),
+    /CF_SECURITY_BLOCKED::/
+  );
+});
+

@@ -16,13 +16,17 @@
 <body>
   <header>
     <div class="header-left">
-      <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
-        stroke-linecap="round" stroke-linejoin="round">
-        <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
-      </svg>
+      <button id="btn-repo-home" class="header-icon-link" type="button" aria-label="打开 GitHub 仓库"
+        title="打开 GitHub 仓库">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"
+          stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">
+          <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
+        </svg>
+      </button>
       <div class="header-version-block">
         <div class="header-version-main">
-          <div id="extension-update-status" class="header-version-title">Pro0.0</div>
+          <button id="extension-update-status" class="header-version-title header-version-link" type="button"
+            aria-label="打开 GitHub Releases 页面" title="打开 GitHub Releases 页面">Pro0.0</button>
           <button id="btn-release-log" class="header-link-btn" type="button" hidden>更新日志</button>
         </div>
         <span id="extension-version-meta" class="header-version-meta" hidden></span>
@@ -30,6 +34,8 @@
     </div>
     <div class="header-btns">
       <div class="run-group">
+        <button id="btn-contribution-mode" class="btn btn-outline btn-sm btn-contribution-mode" type="button"
+          title="打开账号贡献上传页面">贡献</button>
         <input type="number" id="input-run-count" class="run-count-input" value="1" min="1" max="50" title="运行次数" />
         <button id="btn-auto-run" class="btn btn-success" title="自动执行全部步骤">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="currentColor">
@@ -143,7 +149,7 @@
       <div class="data-row" id="row-sub2api-default-proxy" style="display:none;">
         <span class="data-label">默认代理</span>
         <input type="text" id="input-sub2api-default-proxy" class="data-input"
-          placeholder="shadowrocket 或代理 ID" />
+          placeholder="留空则不使用代理；或填写代理名称 / ID" />
       </div>
       <div class="data-row">
         <span class="data-label">账户密码</span>
@@ -569,11 +575,17 @@
           <span id="account-records-meta" class="account-records-panel-meta">暂无邮箱记录</span>
         </div>
         <div class="account-records-panel-actions">
-          <button id="btn-clear-account-records" class="btn btn-ghost btn-xs" type="button">清理记录</button>
           <button id="btn-close-account-records" class="modal-close" type="button" aria-label="关闭">×</button>
         </div>
       </div>
-      <div id="account-records-stats" class="account-records-stats"></div>
+      <div class="account-records-toolbar">
+        <div id="account-records-stats" class="account-records-stats" role="group" aria-label="邮箱记录筛选"></div>
+        <div class="account-records-toolbar-actions">
+          <button id="btn-toggle-account-records-selection" class="btn btn-ghost btn-xs" type="button">多选</button>
+          <button id="btn-delete-selected-account-records" class="btn btn-ghost btn-xs" type="button" hidden disabled>删除选中</button>
+          <button id="btn-clear-account-records" class="btn btn-ghost btn-xs" type="button">清理记录</button>
+        </div>
+      </div>
       <div id="account-records-list" class="account-records-list"></div>
       <div class="account-records-pagination">
         <button id="btn-account-records-prev" class="btn btn-outline btn-xs" type="button">上一页</button>
