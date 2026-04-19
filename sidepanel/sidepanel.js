@@ -27,6 +27,7 @@ const updateSection = document.getElementById('update-section');
 const btnRepoHome = document.getElementById('btn-repo-home');
 const extensionUpdateStatus = document.getElementById('extension-update-status');
 const extensionVersionMeta = document.getElementById('extension-version-meta');
+const extensionBuildMeta = document.getElementById('extension-build-meta');
 const btnReleaseLog = document.getElementById('btn-release-log');
 const updateCardVersion = document.getElementById('update-card-version');
 const updateCardSummary = document.getElementById('update-card-summary');
@@ -63,6 +64,8 @@ const configMenu = document.getElementById('config-menu');
 const btnExportSettings = document.getElementById('btn-export-settings');
 const btnImportSettings = document.getElementById('btn-import-settings');
 const inputImportSettingsFile = document.getElementById('input-import-settings-file');
+const EXTENSION_BUILD_FILE_PATH = 'background.js';
+const EXTENSION_BUILD_META_UNAVAILABLE_TEXT = '本地修改时间不可用';
 const selectPanelMode = document.getElementById('select-panel-mode');
 const rowVpsUrl = document.getElementById('row-vps-url');
 const inputVpsUrl = document.getElementById('input-vps-url');
@@ -1955,6 +1958,76 @@ function resetUpdateCard() {
   }
 }
 
+function formatDateTimeForHeader(value) {
+  const date = value instanceof Date ? value : new Date(value);
+  if (Number.isNaN(date.getTime())) {
+    return '';
+  }
+
+  const year = String(date.getFullYear());
+  const month = String(date.getMonth() + 1).padStart(2, '0');
+  const day = String(date.getDate()).padStart(2, '0');
+  const hours = String(date.getHours()).padStart(2, '0');
+  const minutes = String(date.getMinutes()).padStart(2, '0');
+  const seconds = String(date.getSeconds()).padStart(2, '0');
+  return `${year}-${month}-${day} ${hours}:${minutes}:${seconds}`;
+}
+
+function setExtensionBuildMetaText(text) {
+  if (!extensionBuildMeta) {
+    return;
+  }
+
+  extensionBuildMeta.textContent = String(text || '').trim();
+  extensionBuildMeta.hidden = !extensionBuildMeta.textContent;
+}
+
+async function readPackageFileLastModified(path) {
+  if (typeof chrome?.runtime?.getPackageDirectoryEntry !== 'function') {
+    return 0;
+  }
+
+  return new Promise((resolve) => {
+    chrome.runtime.getPackageDirectoryEntry((root) => {
+      if (chrome.runtime.lastError || !root) {
+        resolve(0);
+        return;
+      }
+
+      root.getFile(path, {}, (entry) => {
+        entry.file((file) => {
+          const timestamp = Number(file?.lastModified)
+            || Number(file?.lastModifiedDate?.getTime?.())
+            || 0;
+          resolve(Number.isFinite(timestamp) ? timestamp : 0);
+        }, () => resolve(0));
+      }, () => resolve(0));
+    });
+  });
+}
+
+async function readResourceLastModifiedHeader(path) {
+  try {
+    const response = await fetch(chrome.runtime.getURL(path), { cache: 'no-store' });
+    const headerValue = response.headers.get('last-modified');
+    if (!headerValue) {
+      return 0;
+    }
+
+    const timestamp = new Date(headerValue).getTime();
+    return Number.isFinite(timestamp) ? timestamp : 0;
+  } catch {
+    return 0;
+  }
+}
+
+async function initializeExtensionBuildMeta() {
+  const timestamp = await readPackageFileLastModified(EXTENSION_BUILD_FILE_PATH)
+    || await readResourceLastModifiedHeader(EXTENSION_BUILD_FILE_PATH);
+  const formatted = timestamp > 0 ? formatDateTimeForHeader(timestamp) : '';
+  setExtensionBuildMetaText(formatted ? `本地修改 ${formatted}` : EXTENSION_BUILD_META_UNAVAILABLE_TEXT);
+}
+
 function renderReleaseSnapshot(snapshot) {
   currentReleaseSnapshot = snapshot;
 
@@ -2052,6 +2125,7 @@ async function initializeReleaseInfo() {
     btnReleaseLog.hidden = true;
   }
   resetUpdateCard();
+  await initializeExtensionBuildMeta();
 
   if (!sidepanelUpdateService) {
     extensionVersionMeta.textContent = '更新检查服务不可用';

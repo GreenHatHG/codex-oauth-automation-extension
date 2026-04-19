@@ -205,6 +205,10 @@ header {
   display: none !important;
 }
 
+.header-build-meta {
+  color: var(--text-muted);
+}
+
 .header-link-btn {
   padding: 0;
   border: none;

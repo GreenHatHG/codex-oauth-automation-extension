@@ -6151,6 +6151,7 @@ function getMailConfig(state) {
   }
   if (provider === '2925') {
     return {
+      provider: '2925',
       source: 'mail-2925',
       url: 'https://2925.com/#/mailList',
       label: '2925 邮箱',
