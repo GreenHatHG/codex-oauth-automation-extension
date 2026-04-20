@@ -5823,6 +5823,11 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
 
 async function runAutoSequenceFromStep(startStep, context = {}) {
   const { targetRun, totalRuns, attemptRuns, continued = false } = context;
+  const CURRENT_EMAIL_LOG_LABEL = '当前邮箱：';
+  function formatCurrentEmailLogLabel(email) {
+    const normalizedEmail = String(email || '').trim();
+    return normalizedEmail ? `${CURRENT_EMAIL_LOG_LABEL}${normalizedEmail}` : '';
+  }
   let postStep7RestartCount = 0;
   let step4RestartCount = 0;
   let currentStartStep = startStep;
@@ -5885,8 +5890,9 @@ async function runAutoSequenceFromStep(startStep, context = {}) {
         step4RestartCount += 1;
         const preservedState = await getState();
         const preservedEmail = String(preservedState.email || '').trim();
+        const preservedEmailLabel = formatCurrentEmailLogLabel(preservedEmail);
         const preservedPassword = String(preservedState.password || '').trim();
-        const emailSuffix = preservedEmail ? `当前邮箱：${preservedEmail}；` : '';
+        const emailSuffix = preservedEmailLabel ? `${preservedEmailLabel}；` : '';
         if (step4RestartCount > step4RestartLimit) {
           await addLog(
             `步骤 4：沿用当前邮箱回到步骤 1 的重开次数已达到上限 ${step4RestartLimit} 次，停止继续内部重开。${emailSuffix}最后原因：${getErrorMessage(err)}`,
@@ -5936,7 +5942,10 @@ async function runAutoSequenceFromStep(startStep, context = {}) {
 
       if (restartDecision.blockedByAddPhone) {
         const addPhoneUrl = restartDecision.authState?.url || 'https://auth.openai.com/add-phone';
-        await addLog(`步骤 ${step}：检测到认证流程进入 add-phone（${addPhoneUrl}），停止自动回到步骤 7 重开。`, 'warn');
+        const currentState = await getState();
+        const currentEmailLabel = formatCurrentEmailLogLabel(currentState.email);
+        const currentEmailSuffix = currentEmailLabel ? `；${currentEmailLabel}` : '';
+        await addLog(`步骤 ${step}：检测到认证流程进入 add-phone（${addPhoneUrl}），停止自动回到步骤 7 重开${currentEmailSuffix}。`, 'warn');
       }
       throw err;
     }

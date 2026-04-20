@@ -67,6 +67,7 @@ function createHarness(options = {}) {
     failureBudget = 1,
     failureMessage = '认证失败: Request failed with status code 502',
     authState = { state: 'password_page', url: 'https://auth.openai.com/log-in' },
+    email = 'run.user@example.com',
   } = options;
 
   return new Function(`
@@ -74,6 +75,7 @@ const AUTO_STEP_DELAYS = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0,
 const LAST_STEP_ID = 10;
 const FINAL_OAUTH_CHAIN_START_STEP = 7;
 const LOG_PREFIX = '[test]';
+const DEFAULT_STEP4_RESTART_LIMIT = 2;
 const chrome = {
   tabs: {
     update: async () => {},
@@ -91,10 +93,16 @@ async function addLog(message, level = 'info') {
   events.logs.push({ message, level });
 }
 
+function normalizeStep4RestartLimit(value, fallback) {
+  const normalized = Number(value);
+  return Number.isFinite(normalized) && normalized >= 0 ? normalized : fallback;
+}
+
 async function ensureAutoEmailReady() {}
 async function broadcastAutoRunStatus() {}
 async function getState() {
   return {
+    email: ${JSON.stringify(email)},
     stepStatuses: { 3: 'completed' },
     mailProvider: '163',
   };
@@ -189,6 +197,7 @@ test('auto-run stops restarting once add-phone is detected', async () => {
     failureBudget: 1,
     failureMessage: '当前页面已进入手机号页面。URL: https://auth.openai.com/add-phone',
     authState: { state: 'add_phone_page', url: 'https://auth.openai.com/add-phone' },
+    email: 'blocked.user@example.com',
   });
 
   const result = await harness.runAndCaptureError();
@@ -197,6 +206,7 @@ test('auto-run stops restarting once add-phone is detected', async () => {
   assert.equal(result.events.invalidations.length, 0);
   assert.deepStrictEqual(result.events.steps, [7]);
   assert.ok(result.events.logs.some(({ message }) => /进入 add-phone/.test(message)));
+  assert.ok(result.events.logs.some(({ message }) => /当前邮箱：blocked\.user@example\.com/.test(message)));
 });
 
 test('auto-run stops restarting on generic phone-page failure messages even without add-phone url', async () => {
