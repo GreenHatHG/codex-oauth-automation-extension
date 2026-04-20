@@ -84,10 +84,21 @@
       return state.tabRegistry || {};
     }
 
-    async function registerTab(source, tabId) {
+    async function setTabRegistryEntry(source, tabId, ready = false) {
+      if (!source || !Number.isInteger(tabId)) {
+        return;
+      }
+
       const registry = await getTabRegistry();
-      registry[source] = { tabId, ready: true };
+      registry[source] = {
+        tabId,
+        ready: Boolean(ready),
+      };
       await setState({ tabRegistry: registry });
+    }
+
+    async function registerTab(source, tabId) {
+      await setTabRegistryEntry(source, tabId, true);
       console.log(LOG_PREFIX, `Tab registered: ${source} -> ${tabId}`);
     }
 
@@ -471,20 +482,19 @@
         const currentTab = await chrome.tabs.get(tabId);
         const sameUrl = currentTab.url === url;
         const shouldReloadOnReuse = sameUrl && options.reloadIfSameUrl;
+        const shouldMarkPending = shouldReloadOnReuse || Boolean(options.inject);
 
-        const registry = await getTabRegistry();
         if (sameUrl) {
           await chrome.tabs.update(tabId, { active: true });
+          if (shouldMarkPending) {
+            await setTabRegistryEntry(source, tabId, false);
+          }
           if (shouldReloadOnReuse) {
-            if (registry[source]) registry[source].ready = false;
-            await setState({ tabRegistry: registry });
             await chrome.tabs.reload(tabId);
             await waitForTabUpdateComplete(tabId);
           }
 
           if (options.inject) {
-            if (registry[source]) registry[source].ready = false;
-            await setState({ tabRegistry: registry });
             if (options.injectSource) {
               await chrome.scripting.executeScript({
                 target: { tabId },
@@ -505,8 +515,7 @@
           return tabId;
         }
 
-        if (registry[source]) registry[source].ready = false;
-        await setState({ tabRegistry: registry });
+        await setTabRegistryEntry(source, tabId, false);
         await chrome.tabs.update(tabId, { url, active: true });
 
         await waitForTabUpdateComplete(tabId);
@@ -534,6 +543,7 @@
 
       await closeConflictingTabsForSource(source, url);
       const tab = await chrome.tabs.create({ url, active: true });
+      await setTabRegistryEntry(source, tab.id, false);
 
       if (options.inject) {
         await waitForTabUpdateComplete(tab.id);
@@ -623,6 +633,7 @@
         timeoutMs = 45000,
         maxRecoveryAttempts = 2,
         responseTimeoutMs,
+        logMessage = '',
       } = options;
       const start = Date.now();
       let lastError = null;
@@ -645,7 +656,10 @@
 
           lastError = err;
           if (!logged) {
-            await addLog(`步骤 ${message.step}：${mail.label} 页面通信异常，正在尝试让邮箱页重新就绪...`, 'warn');
+            await addLog(
+              logMessage || `步骤 ${message.step}：${mail.label} 页面通信异常，正在尝试让邮箱页重新就绪...`,
+              'warn'
+            );
             logged = true;
           }
 

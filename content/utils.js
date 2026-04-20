@@ -7,7 +7,7 @@ const SCRIPT_SOURCE = (() => {
   const url = location.href;
   const hostname = location.hostname;
   if (url.includes('auth0.openai.com') || url.includes('auth.openai.com') || url.includes('accounts.openai.com')) return 'signup-page';
-  if (hostname === 'mail.qq.com' || hostname === 'wx.mail.qq.com') return 'qq-mail';
+  if (hostname === 'mail.qq.com' || hostname === 'wx.mail.qq.com' || hostname === 'secres.wxqcloud.qq.com') return 'qq-mail';
   if (hostname === 'mail.163.com' || hostname.endsWith('.mail.163.com') || hostname === 'webmail.vip.163.com') return 'mail-163';
   if (hostname === 'mail.google.com') return 'gmail-mail';
   if (hostname === 'www.icloud.com' || hostname === 'www.icloud.com.cn') return 'icloud-mail';

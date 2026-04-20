@@ -23,6 +23,7 @@
       QQ_ALIAS_ACCOUNT_URL,
       QQ_ALIAS_EMAIL_GENERATOR,
       reuseOrCreateTab,
+      sendToMailContentScriptResilient,
       sendToContentScriptResilient,
       setQqAliasPendingAction,
       sendToContentScript,
@@ -36,6 +37,9 @@
     const QQ_ALIAS_FLOW_STAGE_OPEN_NEW_ALIAS = 'open_new_alias';
     const QQ_ALIAS_FLOW_TIMEOUT_MS = 660000;
     const QQ_ALIAS_CONTINUE_LABEL = '我已处理，继续';
+    const QQ_ALIAS_MAIL_SOURCE = 'qq-mail';
+    const QQ_ALIAS_MAIL_LABEL = 'QQ 邮箱';
+    const QQ_ALIAS_FLOW_PAGE_SWITCH_LOG = 'QQ 邮箱页正在切换，等待页面重新就绪后继续执行别名流程...';
 
     function generateCloudflareAliasLocalPart() {
       const letters = 'abcdefghijklmnopqrstuvwxyz';
@@ -83,6 +87,14 @@
           continueLabel: QQ_ALIAS_CONTINUE_LABEL,
         };
       }
+      if (reason === 'sms_code') {
+        return {
+          id: Date.now(),
+          title: '手动处理短信验证',
+          message: 'QQ 别名等待超时，请在 QQ 邮箱页中输入短信验证码并提交验证，完成后回到面板点击“继续”。',
+          continueLabel: QQ_ALIAS_CONTINUE_LABEL,
+        };
+      }
       if (reason === 'slider') {
         return {
           id: Date.now(),
@@ -106,6 +118,14 @@
       };
     }
 
+    function buildQqAliasMailTarget(url = '') {
+      return {
+        source: QQ_ALIAS_MAIL_SOURCE,
+        label: QQ_ALIAS_MAIL_LABEL,
+        url,
+      };
+    }
+
     async function dispatchQqAliasFlow(stage, payload = {}) {
       throwIfStopped();
       const normalizedStage = String(stage || '').trim();
@@ -113,11 +133,15 @@
         throw new Error('QQ 别名流程阶段为空。');
       }
 
-      if (normalizedStage === QQ_ALIAS_FLOW_STAGE_START || normalizedStage === QQ_ALIAS_FLOW_STAGE_OPEN_NEW_ALIAS) {
-        const qqAliasAccountUrl = typeof getQqAliasAccountUrl === 'function'
+      const requiresAccountPage = normalizedStage === QQ_ALIAS_FLOW_STAGE_START
+        || normalizedStage === QQ_ALIAS_FLOW_STAGE_OPEN_NEW_ALIAS;
+      let qqAliasAccountUrl = '';
+
+      if (requiresAccountPage) {
+        qqAliasAccountUrl = typeof getQqAliasAccountUrl === 'function'
           ? await getQqAliasAccountUrl()
           : QQ_ALIAS_ACCOUNT_URL;
-        await reuseOrCreateTab('qq-mail', qqAliasAccountUrl, { reloadIfSameUrl: true });
+        await reuseOrCreateTab(QQ_ALIAS_MAIL_SOURCE, qqAliasAccountUrl, { reloadIfSameUrl: true });
       }
 
       const message = {
@@ -129,16 +153,29 @@
         },
       };
 
+      if (requiresAccountPage && typeof sendToMailContentScriptResilient === 'function') {
+        return sendToMailContentScriptResilient(
+          buildQqAliasMailTarget(qqAliasAccountUrl),
+          message,
+          {
+            timeoutMs: QQ_ALIAS_FLOW_TIMEOUT_MS,
+            responseTimeoutMs: QQ_ALIAS_FLOW_TIMEOUT_MS,
+            maxRecoveryAttempts: 2,
+            logMessage: QQ_ALIAS_FLOW_PAGE_SWITCH_LOG,
+          }
+        );
+      }
+
       if (typeof sendToContentScriptResilient === 'function') {
-        return sendToContentScriptResilient('qq-mail', message, {
+        return sendToContentScriptResilient(QQ_ALIAS_MAIL_SOURCE, message, {
           timeoutMs: QQ_ALIAS_FLOW_TIMEOUT_MS,
           responseTimeoutMs: QQ_ALIAS_FLOW_TIMEOUT_MS,
           retryDelayMs: 700,
-          logMessage: 'QQ 邮箱页正在切换，等待页面重新就绪后继续执行别名流程...',
+          logMessage: QQ_ALIAS_FLOW_PAGE_SWITCH_LOG,
         });
       }
 
-      return sendToContentScript('qq-mail', message);
+      return sendToContentScript(QQ_ALIAS_MAIL_SOURCE, message);
     }
 
     async function finalizeQqAliasEmail(email = '') {
@@ -187,9 +224,18 @@
         throw new Error('QQ 别名仅支持在 QQ 邮箱服务下使用。');
       }
 
+      const phoneNumber = String(
+        options.qqAliasPhoneNumber !== undefined
+          ? options.qqAliasPhoneNumber
+          : (latestState?.qqAliasPhoneNumber || '')
+      ).trim();
+      if (!phoneNumber) {
+        throw new Error('QQ 别名短信验证缺少有效手机号补全数字，请填写两个数字，例如 18。');
+      }
+
       await clearQqAliasFlowState();
       await addLog('QQ 别名：正在打开邮箱设置页并准备处理旧别名...', 'info');
-      const result = await dispatchQqAliasFlow(QQ_ALIAS_FLOW_STAGE_START);
+      const result = await dispatchQqAliasFlow(QQ_ALIAS_FLOW_STAGE_START, { phoneNumber });
       return handleQqAliasStageResult(result);
     }
 

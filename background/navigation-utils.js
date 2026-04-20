@@ -101,7 +101,9 @@
         case 'duck-mail':
           return candidate.hostname === 'duckduckgo.com' && candidate.pathname.startsWith('/email/');
         case 'qq-mail':
-          return candidate.hostname === 'mail.qq.com' || candidate.hostname === 'wx.mail.qq.com';
+          return candidate.hostname === 'mail.qq.com'
+            || candidate.hostname === 'wx.mail.qq.com'
+            || candidate.hostname === 'secres.wxqcloud.qq.com';
         case 'mail-163':
           return is163MailHost(candidate.hostname);
         case 'gmail-mail':

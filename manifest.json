@@ -55,7 +55,8 @@
     {
       "matches": [
         "https://mail.qq.com/*",
-        "https://wx.mail.qq.com/*"
+        "https://wx.mail.qq.com/*",
+        "https://secres.wxqcloud.qq.com/*"
       ],
       "js": [
         "content/activation-utils.js",

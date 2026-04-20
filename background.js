@@ -133,6 +133,7 @@ const LUCKMAIL_PROVIDER = 'luckmail-api';
 const CLOUDFLARE_TEMP_EMAIL_PROVIDER = 'cloudflare-temp-email';
 const CLOUDFLARE_TEMP_EMAIL_GENERATOR = 'cloudflare-temp-email';
 const QQ_ALIAS_EMAIL_GENERATOR = 'qq-alias';
+const QQ_MAIL_HOME_URL = 'https://wx.mail.qq.com/';
 const QQ_ALIAS_ACCOUNT_URL = 'https://wx.mail.qq.com/account/index#/';
 const QQ_ALIAS_ACCOUNT_URL_WITH_SID_PREFIX = 'https://wx.mail.qq.com/account/index?sid=';
 const HOTMAIL_MAILBOXES = ['INBOX', 'Junk'];
@@ -254,6 +255,7 @@ const PERSISTED_SETTING_DEFAULTS = {
   icloudHostPreference: 'auto',
   accountRunHistoryTextEnabled: false,
   accountRunHistoryHelperBaseUrl: DEFAULT_ACCOUNT_RUN_HISTORY_HELPER_BASE_URL,
+  qqAliasPhoneNumber: '',
   gmailBaseEmail: '',
   mail2925BaseEmail: '',
   emailPrefix: '',
@@ -910,6 +912,7 @@ function normalizePersistentSettingValue(key, value) {
     case 'gmailBaseEmail':
     case 'mail2925BaseEmail':
     case 'emailPrefix':
+    case 'qqAliasPhoneNumber':
       return String(value || '').trim();
     case 'inbucketHost':
       return String(value || '').trim();
@@ -3562,6 +3565,19 @@ function buildQqAliasAccountUrl(sid = '') {
   return `${QQ_ALIAS_ACCOUNT_URL_WITH_SID_PREFIX}${encodeURIComponent(normalizedSid)}#/`;
 }
 
+function extractQqMailSessionSidFromUrl(rawUrl = '') {
+  const parsed = parseUrlSafely(rawUrl);
+  if (!parsed) {
+    return '';
+  }
+
+  if (parsed.hostname !== 'wx.mail.qq.com' && parsed.hostname !== 'mail.qq.com') {
+    return '';
+  }
+
+  return String(parsed.searchParams.get('sid') || '').trim();
+}
+
 async function getQqMailSessionSidFromTabUrl() {
   const qqMailTabId = await getTabId('qq-mail');
   if (!Number.isInteger(qqMailTabId)) {
@@ -3569,8 +3585,7 @@ async function getQqMailSessionSidFromTabUrl() {
   }
 
   const qqMailTab = await chrome.tabs.get(qqMailTabId).catch(() => null);
-  const parsed = parseUrlSafely(qqMailTab?.url);
-  return String(parsed?.searchParams.get('sid') || '').trim();
+  return extractQqMailSessionSidFromUrl(qqMailTab?.url);
 }
 
 async function getQqMailSessionSidFromCookies() {
@@ -3610,6 +3625,29 @@ async function getQqMailSessionSidFromCookies() {
   return '';
 }
 
+async function resolveQqMailSessionSidFromHomeRedirect() {
+  const qqMailTabId = await reuseOrCreateTab('qq-mail', QQ_MAIL_HOME_URL, { reloadIfSameUrl: true });
+  if (!Number.isInteger(qqMailTabId)) {
+    return '';
+  }
+
+  const redirectedTab = await waitForTabUrlMatch(qqMailTabId, (url) => {
+    const parsed = parseUrlSafely(url);
+    if (!parsed || parsed.hostname !== 'wx.mail.qq.com') {
+      return false;
+    }
+    if (!/\/home\/index(?:[/?#]|$)/i.test(parsed.pathname || '')) {
+      return false;
+    }
+    return Boolean(String(parsed.searchParams.get('sid') || '').trim());
+  }, {
+    timeoutMs: 20000,
+    retryDelayMs: 500,
+  });
+
+  return extractQqMailSessionSidFromUrl(redirectedTab?.url);
+}
+
 async function getQqAliasAccountUrl() {
   const sidFromCookies = await getQqMailSessionSidFromCookies();
   if (sidFromCookies) {
@@ -3617,7 +3655,16 @@ async function getQqAliasAccountUrl() {
   }
 
   const sidFromTabUrl = await getQqMailSessionSidFromTabUrl();
-  return buildQqAliasAccountUrl(sidFromTabUrl);
+  if (sidFromTabUrl) {
+    return buildQqAliasAccountUrl(sidFromTabUrl);
+  }
+
+  const sidFromHomeRedirect = await resolveQqMailSessionSidFromHomeRedirect();
+  if (sidFromHomeRedirect) {
+    return buildQqAliasAccountUrl(sidFromHomeRedirect);
+  }
+
+  throw new Error('未能从 QQ 邮箱首页获取会话 sid，无法进入账户安全页。');
 }
 
 function parseUrlSafely(rawUrl) {
@@ -3750,7 +3797,9 @@ function matchesSourceUrlFamily(source, candidateUrl, referenceUrl) {
     case 'duck-mail':
       return candidate.hostname === 'duckduckgo.com' && candidate.pathname.startsWith('/email/');
     case 'qq-mail':
-      return candidate.hostname === 'mail.qq.com' || candidate.hostname === 'wx.mail.qq.com';
+      return candidate.hostname === 'mail.qq.com'
+        || candidate.hostname === 'wx.mail.qq.com'
+        || candidate.hostname === 'secres.wxqcloud.qq.com';
     case 'mail-163':
       return is163MailHost(candidate.hostname);
     case 'gmail-mail':
@@ -5304,6 +5353,30 @@ function getEmailGeneratorLabel(generator) {
   if (generator === CLOUDFLARE_TEMP_EMAIL_GENERATOR) return 'Cloudflare Temp Email';
   return 'Duck 邮箱';
 }
+
+const QQ_ALIAS_TOO_FREQUENT_ERROR_PATTERN = /(?:QQ\s*别名开通失败：\s*)?操作过于频繁，请稍后重试。?/;
+
+function isNonRetryableGeneratedEmailError(generator, error) {
+  const message = String(error?.message || error || '').trim();
+  if (!message) {
+    return false;
+  }
+
+  if (generator === 'cloudflare' && /域名/.test(message)) {
+    return true;
+  }
+
+  if (generator === CLOUDFLARE_TEMP_EMAIL_GENERATOR && /(服务地址|Admin Auth|域名)/.test(message)) {
+    return true;
+  }
+
+  if (generator === QQ_ALIAS_EMAIL_GENERATOR && QQ_ALIAS_TOO_FREQUENT_ERROR_PATTERN.test(message)) {
+    return true;
+  }
+
+  return false;
+}
+
 const generatedEmailHelpers = self.MultiPageGeneratedEmailHelpers?.createGeneratedEmailHelpers({
   addLog,
   buildGeneratedAliasEmail,
@@ -5325,6 +5398,7 @@ const generatedEmailHelpers = self.MultiPageGeneratedEmailHelpers?.createGenerat
   QQ_ALIAS_ACCOUNT_URL,
   QQ_ALIAS_EMAIL_GENERATOR,
   reuseOrCreateTab,
+  sendToMailContentScriptResilient,
   sendToContentScriptResilient,
   setQqAliasPendingAction,
   sendToContentScript,
@@ -5606,11 +5680,8 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
     } catch (err) {
       lastError = err;
       await addLog(`${generatorLabel}自动获取失败（${attempt}/${EMAIL_FETCH_MAX_ATTEMPTS}）：${err.message}`, 'warn');
-      if (
-        (generator === 'cloudflare' && /域名/.test(String(err.message || '')))
-        || (generator === CLOUDFLARE_TEMP_EMAIL_GENERATOR && /(服务地址|Admin Auth|域名)/.test(String(err.message || '')))
-      ) {
-        break;
+      if (isNonRetryableGeneratedEmailError(generator, err)) {
+        throw err;
       }
     }
   }
@@ -5727,11 +5798,8 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
     } catch (err) {
       lastError = err;
       await addLog(`${generatorLabel}自动获取失败（${attempt}/${EMAIL_FETCH_MAX_ATTEMPTS}）：${err.message}`, 'warn');
-      if (
-        (generator === 'cloudflare' && /域名/.test(String(err.message || '')))
-        || (generator === CLOUDFLARE_TEMP_EMAIL_GENERATOR && /(服务地址|Admin Auth|域名)/.test(String(err.message || '')))
-      ) {
-        break;
+      if (isNonRetryableGeneratedEmailError(generator, err)) {
+        throw err;
       }
     }
   }

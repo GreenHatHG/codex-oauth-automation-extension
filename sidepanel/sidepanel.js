@@ -99,6 +99,8 @@ const rowMail2925Mode = document.getElementById('row-mail-2925-mode');
 const mail2925ModeButtons = Array.from(document.querySelectorAll('[data-mail2925-mode]'));
 const rowEmailGenerator = document.getElementById('row-email-generator');
 const selectEmailGenerator = document.getElementById('select-email-generator');
+const rowQqAliasPhone = document.getElementById('row-qq-alias-phone');
+const inputQqAliasPhone = document.getElementById('input-qq-alias-phone');
 const rowTempEmailBaseUrl = document.getElementById('row-temp-email-base-url');
 const inputTempEmailBaseUrl = document.getElementById('input-temp-email-base-url');
 const rowTempEmailAdminAuth = document.getElementById('row-temp-email-admin-auth');
@@ -1360,6 +1362,7 @@ function collectSettingsPayload() {
     mailProvider: selectMailProvider.value,
     mail2925Mode: getSelectedMail2925Mode(),
     emailGenerator: selectEmailGenerator.value,
+    qqAliasPhoneNumber: inputQqAliasPhone?.value.trim() || '',
     autoDeleteUsedIcloudAlias: checkboxAutoDeleteIcloud?.checked,
     icloudHostPreference: selectIcloudHostPreference?.value || 'auto',
     accountRunHistoryTextEnabled: Boolean(inputAccountRunHistoryTextEnabled?.checked),
@@ -1761,6 +1764,9 @@ function applySettingsState(state) {
   }
   if (checkboxAutoDeleteIcloud) {
     checkboxAutoDeleteIcloud.checked = Boolean(state?.autoDeleteUsedIcloudAlias);
+  }
+  if (inputQqAliasPhone) {
+    inputQqAliasPhone.value = state?.qqAliasPhoneNumber || '';
   }
   if (inputAccountRunHistoryTextEnabled) {
     inputAccountRunHistoryTextEnabled.checked = Boolean(state?.accountRunHistoryTextEnabled);
@@ -2574,12 +2580,16 @@ function updateMailProviderUI() {
   const useCloudflare = selectedGenerator === 'cloudflare';
   const useIcloud = selectedGenerator === 'icloud';
   const useCloudflareTempEmailGenerator = selectedGenerator === 'cloudflare-temp-email';
+  const showQqAliasPhone = useEmailGenerator && useQqAliasGenerator && selectMailProvider.value === 'qq';
   const showCloudflareDomain = useEmailGenerator && useCloudflare;
   const showCloudflareTempEmailSettings = useCloudflareTempEmailProvider || (useEmailGenerator && useCloudflareTempEmailGenerator);
   const showCloudflareTempEmailReceiveMailbox = useCloudflareTempEmailProvider && !useCloudflareTempEmailGenerator;
   const showCloudflareTempEmailDomain = useEmailGenerator && useCloudflareTempEmailGenerator;
   if (rowEmailGenerator) {
     rowEmailGenerator.style.display = useEmailGenerator ? '' : 'none';
+  }
+  if (rowQqAliasPhone) {
+    rowQqAliasPhone.style.display = showQqAliasPhone ? '' : 'none';
   }
   if (icloudSection) {
     const showIcloudSection = (useEmailGenerator && useIcloud) || useIcloudProvider;
@@ -2661,7 +2671,7 @@ function updateMailProviderUI() {
         : (useCustomEmail ? '请先填写自定义注册邮箱，成功一轮后会自动清空' : `先自动获取${uiCopy.label}，或手动粘贴邮箱后再继续`)));
   }
   if (autoHintText && useQqAliasGenerator) {
-    autoHintText.textContent = 'QQ 别名流程会自动打开设置页；遇到 QQ 令牌和滑块时，按提示手动处理后点“继续”。';
+    autoHintText.textContent = 'QQ 别名流程会自动打开设置页并发送短信验证码；侧边栏填写两个补全数字后，脚本会分别填进两个格子，你在 QQ 邮箱页输入验证码并点击提交验证，脚本会自动继续。';
   }
   if (autoHintText && useGmail && useGeneratedAlias) {
     autoHintText.textContent = '请先填写 Gmail 原邮箱，步骤 3 会自动生成 Gmail +tag 地址';
@@ -3027,6 +3037,7 @@ async function fetchGeneratedEmail(options = {}) {
           generateNew: true,
           generator: selectEmailGenerator.value,
           mailProvider: selectMailProvider.value,
+          qqAliasPhoneNumber: inputQqAliasPhone?.value.trim() || '',
           ...buildManagedAliasBaseEmailPayload(),
         },
       });
@@ -4097,6 +4108,14 @@ inputEmailPrefix.addEventListener('blur', () => {
   saveSettings({ silent: true }).catch(() => {});
 });
 
+inputQqAliasPhone?.addEventListener('input', () => {
+  markSettingsDirty(true);
+  scheduleSettingsAutoSave();
+});
+inputQqAliasPhone?.addEventListener('blur', () => {
+  saveSettings({ silent: true }).catch(() => { });
+});
+
 inputInbucketMailbox.addEventListener('input', () => {
   markSettingsDirty(true);
   scheduleSettingsAutoSave();
@@ -4389,6 +4408,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       }
       if (message.payload.cloudflareTempEmailBaseUrl !== undefined) {
         inputTempEmailBaseUrl.value = message.payload.cloudflareTempEmailBaseUrl || '';
+      }
+      if (message.payload.qqAliasPhoneNumber !== undefined && inputQqAliasPhone) {
+        inputQqAliasPhone.value = message.payload.qqAliasPhoneNumber || '';
       }
       if (message.payload.cloudflareTempEmailAdminAuth !== undefined) {
         inputTempEmailAdminAuth.value = message.payload.cloudflareTempEmailAdminAuth || '';
