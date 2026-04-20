@@ -66,6 +66,7 @@
       resumeAutoRun,
       scheduleAutoRun,
       selectLuckmailPurchase,
+      startRegisteredOAuthRetryFlow,
       setCurrentHotmailAccount,
       setEmailState,
       setEmailStateSilently,
@@ -358,6 +359,11 @@
           const mode = message.payload?.mode === 'continue' ? 'continue' : 'restart';
           await setState({ autoRunSkipFailures });
           startAutoRunLoop(totalRuns, { autoRunSkipFailures, mode });
+          return { ok: true };
+        }
+
+        case 'START_REGISTERED_OAUTH_RETRY': {
+          await startRegisteredOAuthRetryFlow(message.payload || {});
           return { ok: true };
         }
 

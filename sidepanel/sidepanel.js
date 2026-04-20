@@ -51,6 +51,7 @@ const btnReset = document.getElementById('btn-reset');
 const btnContributionMode = document.getElementById('btn-contribution-mode');
 const stepsProgress = document.getElementById('steps-progress');
 const btnAutoRun = document.getElementById('btn-auto-run');
+const btnRegisteredOauthRetry = document.getElementById('btn-registered-oauth-retry');
 const btnAutoContinue = document.getElementById('btn-auto-continue');
 const autoContinueBar = document.getElementById('auto-continue-bar');
 const autoScheduleBar = document.getElementById('auto-schedule-bar');
@@ -414,6 +415,22 @@ function getDisplayedRegistrationEmail(state = latestState) {
     return runtimeEmail;
   }
   return getPresetRegistrationEmail(state);
+}
+
+function getRegisteredOAuthRetryEmail(state = latestState) {
+  return String(inputEmail.value || '').trim() || getDisplayedRegistrationEmail(state);
+}
+
+function updateRegisteredOAuthRetryButtonState(options = {}) {
+  if (!btnRegisteredOauthRetry) {
+    return;
+  }
+
+  const anyRunning = options.anyRunning ?? Object.values(getStepStatuses()).some((status) => status === 'running');
+  btnRegisteredOauthRetry.disabled = anyRunning
+    || isAutoRunLockedPhase()
+    || isAutoRunScheduledPhase()
+    || !getRegisteredOAuthRetryEmail();
 }
 
 let latestState = null;
@@ -1687,6 +1704,7 @@ function applyAutoRunStatus(payload = currentAutoRun) {
   updateAutoDelayInputState();
   updateFallbackThreadIntervalInputState();
   syncScheduledCountdownTicker();
+  updateRegisteredOAuthRetryButtonState();
   updateStopButtonState(scheduled || paused || locked || Object.values(getStepStatuses()).some(status => status === 'running'));
   updateConfigMenuControls();
 }
@@ -2883,6 +2901,7 @@ function updateButtonStates() {
   if (selectIcloudHostPreference) selectIcloudHostPreference.disabled = disableIcloudControls;
   if (checkboxAutoDeleteIcloud) checkboxAutoDeleteIcloud.disabled = disableIcloudControls;
   if (btnContributionMode) btnContributionMode.disabled = isContributionButtonLocked();
+  updateRegisteredOAuthRetryButtonState({ anyRunning });
   updateStopButtonState(anyRunning || autoScheduled || isAutoRunPausedPhase() || autoLocked);
 }
 
@@ -3436,6 +3455,33 @@ async function maybeTakeoverAutoRun(actionLabel) {
   return true;
 }
 
+async function startRegisteredOAuthRetry() {
+  if (!(await maybeTakeoverAutoRun('重走 OAuth 流程'))) {
+    return;
+  }
+
+  const email = getRegisteredOAuthRetryEmail();
+  if (!email) {
+    showToast('请先填写已注册邮箱。', 'warn');
+    return;
+  }
+  if (!validateCurrentRegistrationEmail(email, { showToastOnFailure: true })) {
+    return;
+  }
+
+  const response = await chrome.runtime.sendMessage({
+    type: 'START_REGISTERED_OAUTH_RETRY',
+    source: 'sidepanel',
+    payload: {
+      email,
+      password: inputPassword.value,
+    },
+  });
+  if (response?.error) {
+    throw new Error(response.error);
+  }
+}
+
 async function handleSkipStep(step) {
   if (isAutoRunPausedPhase()) {
     const takeoverResponse = await chrome.runtime.sendMessage({
@@ -3726,6 +3772,17 @@ btnAutoRun.addEventListener('click', async () => {
     setDefaultAutoRunButton();
     inputRunCount.disabled = false;
     showToast(err.message, 'error');
+  }
+});
+
+btnRegisteredOauthRetry?.addEventListener('click', async () => {
+  try {
+    btnRegisteredOauthRetry.disabled = true;
+    await startRegisteredOAuthRetry();
+  } catch (err) {
+    showToast(err.message, 'error');
+  } finally {
+    updateRegisteredOAuthRetryButtonState();
   }
 });
 

@@ -5064,6 +5064,8 @@ let resumeWaiter = null;
 const AUTO_RUN_SIGNAL_COMPLETION_TIMEOUT_MS = 120000;
 const AUTO_RUN_BACKGROUND_COMPLETED_STEPS = new Set([1, 2, 4, 6, 7, 8, 9]);
 const STEP_COMPLETION_SIGNAL_STEPS = new Set([3, 5, 10]);
+const REGISTERED_OAUTH_RETRY_RESET_STEP = 6;
+const REGISTERED_OAUTH_RETRY_STEPS = [7, 8, 9, 10];
 
 function waitForStepComplete(step, timeoutMs = 120000) {
   return new Promise((resolve, reject) => {
@@ -5398,6 +5400,40 @@ async function executeStepAndWait(step, delayAfter = 2000) {
   if (delayAfter > 0) {
     await sleepWithStop(delayAfter + Math.floor(Math.random() * 1200));
   }
+}
+
+async function startRegisteredOAuthRetryFlow(options = {}) {
+  clearStopRequest();
+  const state = await ensureManualInteractionAllowed('重走 OAuth 流程');
+  const email = String(options.email || state.email || '').trim();
+  if (!email) {
+    throw new Error('请先填写已注册邮箱后再重走 OAuth。');
+  }
+
+  if (Object.prototype.hasOwnProperty.call(options, 'password')) {
+    await setPersistentSettings({ customPassword: options.password });
+    await setState({ customPassword: options.password });
+    broadcastDataUpdate({ customPassword: options.password });
+  }
+
+  await setEmailState(email);
+
+  const latestState = await getState();
+  const effectivePassword = latestState.password || latestState.customPassword || '';
+  if (!String(effectivePassword || '').trim()) {
+    throw new Error('请先填写账户密码后再重走 OAuth。');
+  }
+
+  await invalidateDownstreamAfterStepRestart(REGISTERED_OAUTH_RETRY_RESET_STEP, {
+    logLabel: '已注册账号重走 OAuth',
+  });
+  await addLog('已注册账号模式：直接从步骤 7 开始重走 OAuth 登录、验证码、授权和回调流程。', 'info');
+
+  for (const step of REGISTERED_OAUTH_RETRY_STEPS) {
+    await executeStepAndWait(step, step === 10 ? 0 : AUTO_STEP_DELAYS[step]);
+  }
+
+  await addLog('已注册账号模式：OAuth 重走流程已完成。', 'ok');
 }
 
 function getEmailGeneratorLabel(generator) {
@@ -6400,6 +6436,7 @@ const messageRouter = self.MultiPageBackgroundMessageRouter?.createMessageRouter
   resumeAutoRun,
   scheduleAutoRun,
   selectLuckmailPurchase,
+  startRegisteredOAuthRetryFlow,
   setCurrentHotmailAccount,
   setEmailState,
   setEmailStateSilently,
