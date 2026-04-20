@@ -248,6 +248,8 @@ const PERSISTED_SETTING_DEFAULTS = {
   autoStepDelaySeconds: null,
   verificationResendCount: DEFAULT_VERIFICATION_RESEND_COUNT,
   step4RestartLimit: DEFAULT_STEP4_RESTART_LIMIT,
+  presetRegistrationEmail: '',
+  presetRegistrationEmailProvider: '',
   mailProvider: '163',
   mail2925Mode: DEFAULT_MAIL_2925_MODE,
   emailGenerator: 'duck',
@@ -300,7 +302,7 @@ const DEFAULT_STATE = {
   currentStep: 0, // 当前流程执行到的步骤编号。
   stepStatuses: Object.fromEntries(STEP_IDS.map((stepId) => [stepId, 'pending'])),
   oauthUrl: null, // 运行时抓取到的 OAuth 地址，不要手动预填。
-  email: null, // 运行时邮箱，由程序自动获取并写入，不能手动预填。
+  email: null, // 运行时邮箱；若已保存预设注册邮箱，会在运行开始前恢复到这里。
   password: null, // 运行时实际密码，由 customPassword 或程序自动生成后写入。
   accounts: [], // 已生成账号记录：{ email, password, createdAt }。
   accountRunHistory: [], // 账号运行历史快照，实际持久化在 chrome.storage.local。
@@ -683,6 +685,30 @@ function normalizeMailProvider(value = '') {
   }
 }
 
+function normalizePresetRegistrationEmailProvider(value = '') {
+  const normalized = String(value || '').trim().toLowerCase();
+  if (!normalized) {
+    return '';
+  }
+
+  switch (normalized) {
+    case 'custom':
+    case ICLOUD_PROVIDER:
+    case GMAIL_PROVIDER:
+    case HOTMAIL_PROVIDER:
+    case LUCKMAIL_PROVIDER:
+    case CLOUDFLARE_TEMP_EMAIL_PROVIDER:
+    case '163':
+    case '163-vip':
+    case 'qq':
+    case 'inbucket':
+    case '2925':
+      return normalized;
+    default:
+      return '';
+  }
+}
+
 function buildLuckmailSessionSettingsPayload(input = {}) {
   if (!input || typeof input !== 'object' || Array.isArray(input)) {
     return {};
@@ -896,6 +922,10 @@ function normalizePersistentSettingValue(key, value) {
       return normalizeVerificationResendCount(value, DEFAULT_VERIFICATION_RESEND_COUNT);
     case 'step4RestartLimit':
       return normalizeStep4RestartLimit(value, DEFAULT_STEP4_RESTART_LIMIT);
+    case 'presetRegistrationEmail':
+      return String(value || '').trim();
+    case 'presetRegistrationEmailProvider':
+      return normalizePresetRegistrationEmailProvider(value);
     case 'mailProvider':
       return normalizeMailProvider(value);
     case 'mail2925Mode':
@@ -1074,6 +1104,21 @@ async function setPersistentSettings(updates) {
   }
 }
 
+async function setPresetRegistrationEmailState(email, provider) {
+  const normalizedEmail = String(email || '').trim();
+  const normalizedProvider = normalizedEmail
+    ? normalizePresetRegistrationEmailProvider(provider)
+    : '';
+  const updates = {
+    presetRegistrationEmail: normalizedEmail,
+    presetRegistrationEmailProvider: normalizedProvider,
+  };
+  await setPersistentSettings(updates);
+  await setState(updates);
+  broadcastDataUpdate(updates);
+  return normalizedEmail;
+}
+
 function buildSettingsExportFilename(date = new Date()) {
   const pad = (value) => String(value).padStart(2, '0');
   return `${SETTINGS_EXPORT_FILENAME_PREFIX}-${date.getFullYear()}${pad(date.getMonth() + 1)}${pad(date.getDate())}-${pad(date.getHours())}${pad(date.getMinutes())}${pad(date.getSeconds())}.json`;
@@ -1121,7 +1166,7 @@ async function importSettingsBundle(configBundle) {
   const sessionUpdates = {
     ...importedSettings,
     currentHotmailAccountId: null,
-    email: null,
+    email: getPresetRegistrationEmail(importedSettings) || null,
   };
 
   await setState(sessionUpdates);
@@ -1373,6 +1418,7 @@ async function resetState() {
     ...DEFAULT_STATE,
     ...persistedSettings,
     ...persistedAliasState,
+    email: getPresetRegistrationEmail(persistedSettings) || null,
     seenCodes: prev.seenCodes || [],
     seenInbucketMailIds: prev.seenInbucketMailIds || [],
     accounts: prev.accounts || [],
@@ -2256,6 +2302,21 @@ function getManagedAliasBaseEmail(state = {}, provider = state?.mailProvider) {
   }
 
   return '';
+}
+
+function getPresetRegistrationEmail(state = {}, provider = state?.mailProvider) {
+  const presetRegistrationEmail = String(state?.presetRegistrationEmail || '').trim();
+  if (!presetRegistrationEmail) {
+    return '';
+  }
+
+  const presetProvider = normalizePresetRegistrationEmailProvider(state?.presetRegistrationEmailProvider);
+  const currentProvider = normalizeMailProvider(provider);
+  if (!presetProvider || presetProvider !== currentProvider) {
+    return '';
+  }
+
+  return presetRegistrationEmail;
 }
 
 function isGeneratedAliasProvider(stateOrProvider, mail2925Mode = undefined) {

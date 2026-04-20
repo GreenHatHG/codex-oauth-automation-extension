@@ -548,9 +548,17 @@
           if (isAutoRunLockedState(state)) {
             throw new Error('自动流程运行中，当前不能手动修改邮箱。');
           }
-          await setEmailState(message.payload.email);
-          await resumeAutoRun();
-          return { ok: true, email: message.payload.email };
+          const email = await setPresetRegistrationEmailState(message.payload?.email, state.mailProvider);
+          await setEmailState(email || null);
+          if (email) {
+            await resumeAutoRun();
+          }
+          return {
+            ok: true,
+            email,
+            presetRegistrationEmail: email,
+            presetRegistrationEmailProvider: email ? normalizePresetRegistrationEmailProvider(state.mailProvider) : '',
+          };
         }
 
         case 'FETCH_GENERATED_EMAIL': {

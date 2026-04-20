@@ -393,6 +393,29 @@ function validateCurrentRegistrationEmail(email = inputEmail.value.trim(), optio
   return false;
 }
 
+function getPresetRegistrationEmail(state = latestState, provider = state?.mailProvider) {
+  const presetRegistrationEmail = String(state?.presetRegistrationEmail || '').trim();
+  if (!presetRegistrationEmail) {
+    return '';
+  }
+
+  const presetProvider = String(state?.presetRegistrationEmailProvider || '').trim().toLowerCase();
+  const currentProvider = String(provider || '').trim().toLowerCase();
+  if (!presetProvider || !currentProvider || presetProvider !== currentProvider) {
+    return '';
+  }
+
+  return presetRegistrationEmail;
+}
+
+function getDisplayedRegistrationEmail(state = latestState) {
+  const runtimeEmail = String(state?.email || '').trim();
+  if (runtimeEmail) {
+    return runtimeEmail;
+  }
+  return getPresetRegistrationEmail(state);
+}
+
 let latestState = null;
 let currentAutoRun = {
   autoRunning: false,
@@ -1723,7 +1746,7 @@ function applySettingsState(state) {
   syncLatestState(state);
   syncAutoRunState(state);
 
-  inputEmail.value = state?.email || '';
+  inputEmail.value = getDisplayedRegistrationEmail(state);
   syncPasswordField(state || {});
   inputVpsUrl.value = state?.vpsUrl || '';
   inputVpsPassword.value = state?.vpsPassword || '';
@@ -3804,7 +3827,7 @@ btnReset.addEventListener('click', async () => {
   displayOauthUrl.classList.remove('has-value');
   displayLocalhostUrl.textContent = '等待中...';
   displayLocalhostUrl.classList.remove('has-value');
-  inputEmail.value = '';
+  inputEmail.value = getDisplayedRegistrationEmail();
   displayStatus.textContent = '就绪';
   statusBar.className = 'status-bar';
   logArea.innerHTML = '';
@@ -3837,16 +3860,12 @@ inputEmail.addEventListener('change', async () => {
   const email = inputEmail.value.trim();
   inputEmail.value = email;
   try {
-    if (email) {
-      if (!validateCurrentRegistrationEmail(email, { showToastOnFailure: true })) {
-        return;
-      }
-      const response = await chrome.runtime.sendMessage({ type: 'SAVE_EMAIL', source: 'sidepanel', payload: { email } });
-      if (response?.error) {
-        throw new Error(response.error);
-      }
-    } else {
-      await setRuntimeEmailState(null);
+    if (email && !validateCurrentRegistrationEmail(email, { showToastOnFailure: true })) {
+      return;
+    }
+    const response = await chrome.runtime.sendMessage({ type: 'SAVE_EMAIL', source: 'sidepanel', payload: { email } });
+    if (response?.error) {
+      throw new Error(response.error);
     }
   } catch (err) {
     showToast(err.message, 'error');
@@ -4358,7 +4377,7 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       displayOauthUrl.classList.remove('has-value');
       displayLocalhostUrl.textContent = '等待中...';
       displayLocalhostUrl.classList.remove('has-value');
-      inputEmail.value = '';
+      inputEmail.value = getDisplayedRegistrationEmail();
       displayStatus.textContent = '就绪';
       statusBar.className = 'status-bar';
       logArea.innerHTML = '';
@@ -4391,6 +4410,9 @@ chrome.runtime.onMessage.addListener((message, _sender, sendResponse) => {
       syncLatestState(message.payload);
       if (message.payload.email !== undefined) {
         inputEmail.value = message.payload.email || '';
+      } else if (message.payload.presetRegistrationEmail !== undefined
+        || message.payload.presetRegistrationEmailProvider !== undefined) {
+        inputEmail.value = getDisplayedRegistrationEmail();
       }
       if (message.payload.password !== undefined) {
         inputPassword.value = message.payload.password || '';
