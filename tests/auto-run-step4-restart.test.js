@@ -56,6 +56,7 @@ const bundle = [
   extractFunction('isAddPhoneAuthUrl'),
   extractFunction('isAddPhoneAuthState'),
   extractFunction('getPostStep6AutoRestartDecision'),
+  extractFunction('formatCurrentEmailLogLabel'),
   extractFunction('runAutoSequenceFromStep'),
 ].join('\n');
 
@@ -64,6 +65,8 @@ test('auto-run restarts from step 1 with the same email after step 4 failure', a
 const AUTO_STEP_DELAYS = { 1: 0, 2: 0, 3: 0, 4: 0, 5: 0, 6: 0, 7: 0, 8: 0, 9: 0, 10: 0 };
 const LAST_STEP_ID = 10;
 const FINAL_OAUTH_CHAIN_START_STEP = 7;
+const DEFAULT_STEP4_RESTART_LIMIT = 2;
+const CURRENT_EMAIL_LOG_LABEL = '当前邮箱：';
 const chrome = {
   tabs: {
     update: async () => {},
@@ -101,6 +104,11 @@ const events = {
 
 async function addLog(message, level = 'info') {
   events.logs.push({ message, level });
+}
+
+function normalizeStep4RestartLimit(value, fallback) {
+  const normalized = Number(value);
+  return Number.isFinite(normalized) && normalized >= 0 ? normalized : fallback;
 }
 
 async function ensureAutoEmailReady() {
@@ -197,7 +205,7 @@ return {
     {
       step: 1,
       options: {
-        logLabel: '步骤 4 报错后准备回到步骤 1 沿用当前邮箱重试（第 1 次重开）',
+        logLabel: '步骤 4 报错后准备回到步骤 1 沿用当前邮箱重试（第 1/2 次重开）',
       },
     },
   ]);

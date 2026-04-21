@@ -57,6 +57,7 @@ const bundle = [
   extractFunction('isAddPhoneAuthUrl'),
   extractFunction('isAddPhoneAuthState'),
   extractFunction('getPostStep6AutoRestartDecision'),
+  extractFunction('formatCurrentEmailLogLabel'),
   extractFunction('runAutoSequenceFromStep'),
 ].join('\n');
 
@@ -76,6 +77,7 @@ const LAST_STEP_ID = 10;
 const FINAL_OAUTH_CHAIN_START_STEP = 7;
 const LOG_PREFIX = '[test]';
 const DEFAULT_STEP4_RESTART_LIMIT = 2;
+const CURRENT_EMAIL_LOG_LABEL = '当前邮箱：';
 const chrome = {
   tabs: {
     update: async () => {},

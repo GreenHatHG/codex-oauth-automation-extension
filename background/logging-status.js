@@ -4,8 +4,10 @@
   function createLoggingStatus(deps = {}) {
     const {
       chrome,
+      CURRENT_EMAIL_LOG_LABEL = '当前邮箱：',
       DEFAULT_STATE,
       getState,
+      HAS_LOGGED_CURRENT_EMAIL_AFTER_VERIFICATION_STATE_KEY = 'hasLoggedCurrentEmailAfterVerification',
       isRecoverableStep9AuthFailure,
       LOG_PREFIX,
       setState,
@@ -39,6 +41,27 @@
       if (logs.length > 500) logs.splice(0, logs.length - 500);
       await setState({ logs });
       chrome.runtime.sendMessage({ type: 'LOG_ENTRY', payload: entry }).catch(() => { });
+    }
+
+    function formatCurrentEmailLogLabel(email) {
+      const normalizedEmail = String(email || '').trim();
+      return normalizedEmail ? `${CURRENT_EMAIL_LOG_LABEL}${normalizedEmail}` : '';
+    }
+
+    async function logCurrentEmailAfterFirstVerificationReceipt() {
+      const state = await getState();
+      if (state?.[HAS_LOGGED_CURRENT_EMAIL_AFTER_VERIFICATION_STATE_KEY]) {
+        return false;
+      }
+
+      const currentEmailLabel = formatCurrentEmailLogLabel(state?.email);
+      if (!currentEmailLabel) {
+        return false;
+      }
+
+      await addLog(currentEmailLabel);
+      await setState({ [HAS_LOGGED_CURRENT_EMAIL_AFTER_VERIFICATION_STATE_KEY]: true });
+      return true;
     }
 
     async function setStepStatus(step, status) {
@@ -152,6 +175,7 @@
 
     return {
       addLog,
+      formatCurrentEmailLogLabel,
       getAutoRunStatusPayload,
       isAddPhoneAuthFailure,
       getErrorMessage,
@@ -165,6 +189,7 @@
       isStep9RecoverableAuthError,
       isStepDoneStatus,
       isVerificationMailPollingError,
+      logCurrentEmailAfterFirstVerificationReceipt,
       setStepStatus,
     };
   }

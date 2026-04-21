@@ -297,6 +297,11 @@ const PRE_LOGIN_COOKIE_CLEAR_ORIGINS = [
   'https://accounts.openai.com',
   'https://openai.com',
 ];
+const CURRENT_EMAIL_LOG_LABEL = '当前邮箱：';
+const HAS_LOGGED_CURRENT_EMAIL_AFTER_VERIFICATION_STATE_KEY = 'hasLoggedCurrentEmailAfterVerification';
+const CURRENT_EMAIL_AFTER_VERIFICATION_LOG_RESET = {
+  [HAS_LOGGED_CURRENT_EMAIL_AFTER_VERIFICATION_STATE_KEY]: false,
+};
 
 const DEFAULT_STATE = {
   currentStep: 0, // 当前流程执行到的步骤编号。
@@ -348,6 +353,7 @@ const DEFAULT_STATE = {
   autoRunCountdownNote: '',
   signupVerificationRequestedAt: null,
   loginVerificationRequestedAt: null,
+  ...CURRENT_EMAIL_AFTER_VERIFICATION_LOG_RESET,
   oauthFlowDeadlineAt: null,
   currentHotmailAccountId: null,
   preferredIcloudHost: '',
@@ -1194,7 +1200,14 @@ function broadcastIcloudAliasesChanged(payload = {}) {
 }
 
 async function setEmailStateSilently(email) {
-  await setState({ email });
+  const state = await getState();
+  const previousEmail = String(state.email || '').trim().toLowerCase();
+  const nextEmail = String(email || '').trim().toLowerCase();
+  const updates = { email };
+  if (previousEmail !== nextEmail) {
+    Object.assign(updates, CURRENT_EMAIL_AFTER_VERIFICATION_LOG_RESET);
+  }
+  await setState(updates);
   broadcastDataUpdate({ email });
 }
 
@@ -3999,6 +4012,34 @@ async function addLog(message, level = 'info') {
   chrome.runtime.sendMessage({ type: 'LOG_ENTRY', payload: entry }).catch(() => { });
 }
 
+function formatCurrentEmailLogLabel(email) {
+  if (typeof loggingStatus !== 'undefined' && loggingStatus?.formatCurrentEmailLogLabel) {
+    return loggingStatus.formatCurrentEmailLogLabel(email);
+  }
+  const normalizedEmail = String(email || '').trim();
+  return normalizedEmail ? `${CURRENT_EMAIL_LOG_LABEL}${normalizedEmail}` : '';
+}
+
+async function logCurrentEmailAfterFirstVerificationReceipt() {
+  if (typeof loggingStatus !== 'undefined' && loggingStatus?.logCurrentEmailAfterFirstVerificationReceipt) {
+    return loggingStatus.logCurrentEmailAfterFirstVerificationReceipt();
+  }
+
+  const state = await getState();
+  if (state?.[HAS_LOGGED_CURRENT_EMAIL_AFTER_VERIFICATION_STATE_KEY]) {
+    return false;
+  }
+
+  const currentEmailLabel = formatCurrentEmailLogLabel(state?.email);
+  if (!currentEmailLabel) {
+    return false;
+  }
+
+  await addLog(currentEmailLabel);
+  await setState({ [HAS_LOGGED_CURRENT_EMAIL_AFTER_VERIFICATION_STATE_KEY]: true });
+  return true;
+}
+
 function getStep8CallbackUrlFromNavigation(details, signupTabId) {
   if (typeof navigationUtils !== 'undefined' && navigationUtils?.getStep8CallbackUrlFromNavigation) {
     return navigationUtils.getStep8CallbackUrlFromNavigation(details, signupTabId);
@@ -4078,8 +4119,10 @@ const navigationUtils = self.MultiPageBackgroundNavigationUtils?.createNavigatio
 
 const loggingStatus = self.MultiPageBackgroundLoggingStatus?.createLoggingStatus({
   chrome,
+  CURRENT_EMAIL_LOG_LABEL,
   DEFAULT_STATE,
   getState,
+  HAS_LOGGED_CURRENT_EMAIL_AFTER_VERIFICATION_STATE_KEY,
   isRecoverableStep9AuthFailure,
   LOG_PREFIX,
   setState,
@@ -4264,6 +4307,7 @@ function getDownstreamStateResets(step) {
       lastEmailTimestamp: null,
       signupVerificationRequestedAt: null,
       loginVerificationRequestedAt: null,
+      ...CURRENT_EMAIL_AFTER_VERIFICATION_LOG_RESET,
       oauthFlowDeadlineAt: null,
       lastSignupCode: null,
       lastLoginCode: null,
@@ -4276,6 +4320,7 @@ function getDownstreamStateResets(step) {
       lastEmailTimestamp: null,
       signupVerificationRequestedAt: null,
       loginVerificationRequestedAt: null,
+      ...CURRENT_EMAIL_AFTER_VERIFICATION_LOG_RESET,
       oauthFlowDeadlineAt: null,
       lastSignupCode: null,
       lastLoginCode: null,
@@ -4287,6 +4332,7 @@ function getDownstreamStateResets(step) {
       lastEmailTimestamp: null,
       signupVerificationRequestedAt: null,
       loginVerificationRequestedAt: null,
+      ...CURRENT_EMAIL_AFTER_VERIFICATION_LOG_RESET,
       oauthFlowDeadlineAt: null,
       lastSignupCode: null,
       lastLoginCode: null,
@@ -4297,6 +4343,7 @@ function getDownstreamStateResets(step) {
     return {
       lastLoginCode: null,
       loginVerificationRequestedAt: null,
+      ...CURRENT_EMAIL_AFTER_VERIFICATION_LOG_RESET,
       oauthFlowDeadlineAt: null,
       localhostUrl: null,
     };
@@ -5920,11 +5967,6 @@ async function ensureAutoEmailReady(targetRun, totalRuns, attemptRuns) {
 
 async function runAutoSequenceFromStep(startStep, context = {}) {
   const { targetRun, totalRuns, attemptRuns, continued = false } = context;
-  const CURRENT_EMAIL_LOG_LABEL = '当前邮箱：';
-  function formatCurrentEmailLogLabel(email) {
-    const normalizedEmail = String(email || '').trim();
-    return normalizedEmail ? `${CURRENT_EMAIL_LOG_LABEL}${normalizedEmail}` : '';
-  }
   let postStep7RestartCount = 0;
   let step4RestartCount = 0;
   let currentStartStep = startStep;
@@ -6216,6 +6258,7 @@ const verificationFlowHelpers = self.MultiPageBackgroundVerificationFlow?.create
   HOTMAIL_PROVIDER,
   isStopError,
   LUCKMAIL_PROVIDER,
+  logCurrentEmailAfterFirstVerificationReceipt,
   MAIL_2925_SUBACCOUNT_LIMIT_ERROR_PREFIX,
   MAIL_2925_SUBACCOUNT_LIMIT_USER_MESSAGE,
   MAIL_2925_VERIFICATION_INTERVAL_MS,

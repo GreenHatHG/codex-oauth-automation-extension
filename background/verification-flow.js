@@ -15,6 +15,7 @@
       HOTMAIL_PROVIDER,
       isStopError,
       LUCKMAIL_PROVIDER,
+      logCurrentEmailAfterFirstVerificationReceipt = async () => false,
       MAIL_2925_SUBACCOUNT_LIMIT_ERROR_PREFIX = 'MAIL_2925_SUBACCOUNT_LIMIT::',
       MAIL_2925_SUBACCOUNT_LIMIT_USER_MESSAGE = '检测到 2925 邮箱通知：子账号数量已达上限，当前流程已停止，请处理后再重试。',
       MAIL_2925_VERIFICATION_INTERVAL_MS,
@@ -752,6 +753,7 @@
 
           throwIfStopped();
           await addLog(`步骤 ${step}：已获取${getVerificationCodeLabel(step)}验证码：${result.code}`);
+          await logCurrentEmailAfterFirstVerificationReceipt();
           if (beforeSubmit) {
             await beforeSubmit(result, {
               attempt,
